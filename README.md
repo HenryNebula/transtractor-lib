@@ -64,6 +64,21 @@ Detailed [documentation](https://transtractor-lib.readthedocs.io/en/latest/) mai
    parser.parse('statement.pdf').to_csv('statement.csv')
    ```
 
+   Example output:
+   ```csv
+   date,description,amount,balance
+   2025-01-01,Transaction 1,50000.0,100000.0
+   2025-01-01,Transaction 2,-1000.0,99000.0
+   2025-01-01,Transaction 3,-10000.0,89000.0
+   2025-01-01,Transaction 4,1350.0,90350.0
+   2025-01-03,Transaction 5,-530.99,89819.01
+   2025-01-03,Transaction 6,1532.55,91351.56
+   2025-01-04,Transaction 7,-568.01,90783.55
+   2025-01-04,Transaction 8,-23.56,90759.99
+   2025-01-04,Transaction 9,-2000.0,88759.99
+   ...
+   ```
+
 3. **Convert PDF to DataFrame**: Load into a DataFrame for analysis
    ```python
    import pandas as pd
