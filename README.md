@@ -86,6 +86,11 @@ parser.load('my_config.json')
 parser.parse('statement.pdf').to_csv('statement.csv')
 ```
 
+## Performance
+The Transtractor typically parses between 10 and 20 statements per second on average. Parsing time scales linearly with the number of transactions in each statement. Actual performance varies by statement type and the density of extractable information. Statements with a higher proportion of non-extractable content create more noise for the parser to filter through.
+
+![Parsing performance vs. number of transactions](md/performance.svg)
+
 ## WASM Implementation
 WASM bindings are also provided for in-browser parsing of PDF bank statements. See [this guide](md/wasm.md) for an introductory guide on how to compile and use them. 
 
