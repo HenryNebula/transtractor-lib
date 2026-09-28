@@ -18,6 +18,7 @@ The Transtractor is a rules-based PDF bank statement parser for extracting struc
 * Infer missing transaction dates and running balances
 * Normalise transaction signs so debits are negative and credits are positive
 * Validate transaction totals against opening and closing balances
+* Process statements at a throughput of 10 to 20 statements per second on average
 * Run locally without sending financial documents to an external AI service
 * Use the same core parser in Python applications or browser-based WebAssembly integrations
 
