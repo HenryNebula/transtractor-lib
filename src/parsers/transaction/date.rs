@@ -127,21 +127,14 @@ impl TransactionDateParser {
 
     /// Try parsing date and check if in x_ranges
     fn try_parse_date(&mut self, items: &[TextItem]) -> usize {
-        let consumed = self
-            .date_parser
-            .parse_items(items, self.start_date_year_str.as_ref());
-        if consumed == 0 {
-            return 0;
-        }
-        // Check if date falls within x_ranges
-        let item = self.date_parser.text_item.as_ref().unwrap();
-        let x1_ok = item.x1 >= self.x1_range[0] && item.x1 <= self.x1_range[1];
-        let x2_ok = item.x2 >= self.x2_range[0] && item.x2 <= self.x2_range[1];
-        if !x1_ok || !x2_ok {
-            // Reset date parser state
-            self.date_parser.reset();
-            return 0;
-        }
-        consumed
+        let x1_range = (self.x1_range[0], self.x1_range[1]);
+        let x2_range = (self.x2_range[0], self.x2_range[1]);
+        self.date_parser
+            .parse_items_filtered(items, self.start_date_year_str.as_ref(), |item| {
+                item.x1 >= x1_range.0
+                    && item.x1 <= x1_range.1
+                    && item.x2 >= x2_range.0
+                    && item.x2 <= x2_range.1
+            })
     }
 }

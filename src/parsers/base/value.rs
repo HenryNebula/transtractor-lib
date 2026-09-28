@@ -62,6 +62,15 @@ impl ValueParser {
     /// Iteratively join text items and attempt to match regex patterns
     /// Returns number of items consumed if successful, else 0
     pub fn parse_items(&mut self, items: &[TextItem]) -> usize {
+        self.parse_items_filtered(items, |_| true)
+    }
+
+    /// Same as `parse_items`, but rejects candidates failing `predicate` before
+    /// running the (comparatively expensive) regex match against them.
+    pub fn parse_items_filtered<F>(&mut self, items: &[TextItem], predicate: F) -> usize
+    where
+        F: Fn(&TextItem) -> bool,
+    {
         if items.is_empty() {
             return 0;
         }
@@ -72,7 +81,9 @@ impl ValueParser {
             .copied()
             .filter(|count| *count <= items.len())
         {
-            if let Some(curr_item) = TextItem::from_items(&items[0..i]) {
+            if let Some(curr_item) = TextItem::from_items(&items[0..i])
+                && predicate(&curr_item)
+            {
                 let curr_text = &curr_item.text;
                 if self.patterns.iter().any(|p| p.is_match(curr_text)) {
                     self.value = Some(curr_text.clone());

@@ -173,28 +173,38 @@ impl TransactionAmountParser {
 
     /// Try parsing amount, invert if within invert bounds
     fn try_parse_amount(&mut self, items: &[TextItem]) -> usize {
-        let consumed = self.amount_parser.parse_items(items);
+        let x1_range = (self.x1_range[0], self.x1_range[1]);
+        let x2_range = (self.x2_range[0], self.x2_range[1]);
+        let invert_x1_range = (self.invert_x1_range[0], self.invert_x1_range[1]);
+        let invert_x2_range = (self.invert_x2_range[0], self.invert_x2_range[1]);
+        let has_inverted_column = self.has_inverted_column;
+        // Reject candidates outside both the normal and (if configured) invert ranges
+        // before running the expensive amount parsing.
+        let consumed = self.amount_parser.parse_items_filtered(items, |item| {
+            let in_range = item.x1 >= x1_range.0
+                && item.x1 <= x1_range.1
+                && item.x2 >= x2_range.0
+                && item.x2 <= x2_range.1;
+            if in_range {
+                return true;
+            }
+            has_inverted_column
+                && item.x1 >= invert_x1_range.0
+                && item.x1 <= invert_x1_range.1
+                && item.x2 >= invert_x2_range.0
+                && item.x2 <= invert_x2_range.1
+        });
         if consumed == 0 {
             return 0; // No amount found
         }
         let item = self.amount_parser.text_item();
-        // Must be within x1 and x2 ranges or within invert ranges
         let x1_ok = item.x1 >= self.x1_range[0] && item.x1 <= self.x1_range[1];
         let x2_ok = item.x2 >= self.x2_range[0] && item.x2 <= self.x2_range[1];
         if x1_ok && x2_ok {
             return consumed;
         }
-        // Check invert ranges if configured
-        if self.has_inverted_column {
-            let ix1_ok = item.x1 >= self.invert_x1_range[0] && item.x1 <= self.invert_x1_range[1];
-            let ix2_ok = item.x2 >= self.invert_x2_range[0] && item.x2 <= self.invert_x2_range[1];
-            if ix1_ok && ix2_ok {
-                self.amount_parser.invert();
-                return consumed;
-            }
-        }
-        // Reset amount parser state
-        self.amount_parser.reset();
-        0
+        // Must be in the invert range, since the filter above only allowed that as an alternative
+        self.amount_parser.invert();
+        consumed
     }
 }

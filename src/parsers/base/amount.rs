@@ -43,6 +43,15 @@ impl AmountParser {
     /// Iteratively join text items and attempt to parse amounts
     /// Returns number of items consumed if successful, else 0
     pub fn parse_items(&mut self, items: &[TextItem]) -> usize {
+        self.parse_items_filtered(items, |_| true)
+    }
+
+    /// Same as `parse_items`, but rejects candidates failing `predicate` before
+    /// running the (comparatively expensive) amount parsing against them.
+    pub fn parse_items_filtered<F>(&mut self, items: &[TextItem], predicate: F) -> usize
+    where
+        F: Fn(&TextItem) -> bool,
+    {
         if items.is_empty() {
             return 0;
         }
@@ -54,6 +63,7 @@ impl AmountParser {
             .filter(|count| *count <= items.len())
         {
             if let Some(curr_item) = TextItem::from_items(&items[0..i])
+                && predicate(&curr_item)
                 && let Some(val) = self.parser.parse(&curr_item.text, i)
             {
                 self.value = Some(val);

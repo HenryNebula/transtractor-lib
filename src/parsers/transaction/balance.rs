@@ -122,19 +122,13 @@ impl TransactionBalanceParser {
 
     /// Try parsing balance and check if in x_ranges
     fn try_parse_balance(&mut self, items: &[TextItem]) -> usize {
-        let consumed = self.balance_parser.parse_items(items);
-        if consumed == 0 {
-            return 0; // No balance found
-        }
-        let item = self.balance_parser.text_item();
-        // Check x1 and x2 ranges
-        let x1_ok = item.x1 >= self.x1_range[0] && item.x1 <= self.x1_range[1];
-        let x2_ok = item.x2 >= self.x2_range[0] && item.x2 <= self.x2_range[1];
-        if !x1_ok || !x2_ok {
-            // Reset balance parser state
-            self.balance_parser.reset();
-            return 0;
-        }
-        consumed
+        let x1_range = (self.x1_range[0], self.x1_range[1]);
+        let x2_range = (self.x2_range[0], self.x2_range[1]);
+        self.balance_parser.parse_items_filtered(items, |item| {
+            item.x1 >= x1_range.0
+                && item.x1 <= x1_range.1
+                && item.x2 >= x2_range.0
+                && item.x2 <= x2_range.1
+        })
     }
 }

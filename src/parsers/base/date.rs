@@ -39,7 +39,23 @@ impl DateParser {
     /// Iteratively join text items and attempt to parse dates
     /// Returns number of items consumed if successful, else 0
     pub fn parse_items(&mut self, items: &[TextItem], year_str: &str) -> usize {
-        if items.is_empty() {
+        self.parse_items_filtered(items, year_str, |_| true)
+    }
+
+    /// Same as `parse_items`, but rejects the candidate up front if it fails
+    /// `predicate`, before running the (comparatively expensive) date parsing.
+    /// Note: the resulting text item's position always derives from `items[0]`,
+    /// so the predicate result is invariant across all candidate lengths.
+    pub fn parse_items_filtered<F>(
+        &mut self,
+        items: &[TextItem],
+        year_str: &str,
+        predicate: F,
+    ) -> usize
+    where
+        F: Fn(&TextItem) -> bool,
+    {
+        if items.is_empty() || !predicate(&items[0]) {
             return 0;
         }
         // Try longest first, then shorter
