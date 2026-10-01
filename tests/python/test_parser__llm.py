@@ -162,6 +162,10 @@ def test_correction_loop_recovers_on_second_attempt(mock_llm):
     assert second["messages"][2]["role"] == "assistant"
     assert "balance mismatch" in second["messages"][3]["content"]
     assert "Your previous answer" in second["messages"][3]["content"]
+    # Pattern-driven diagnosis is included: this fixture is a final-only gap
+    # of 100 = 2 x 50.00, so the Deposit row is flagged as a sign-flip candidate.
+    assert "Diagnosis (final-only-total-gap)" in second["messages"][3]["content"]
+    assert "sign may be flipped" in second["messages"][3]["content"]
 
 
 def test_llm_schema_rejection_is_retried_without_response_format(mock_llm):

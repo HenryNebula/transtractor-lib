@@ -32,8 +32,13 @@ flipped sign, or dropped row will be detected.\n\
 - Respond with a single JSON object and nothing else — no prose, no markdown.";
 
 /// User instruction for the correction round of the self-correction loop:
-/// the checker errors from the previous attempt are fed back verbatim.
-pub fn correction_prompt(errors: &[String], previous_json: &str) -> String {
+/// the checker errors from the previous attempt are fed back verbatim, plus
+/// any pattern-driven hints from [`crate::llm::diagnostics`].
+pub fn correction_prompt(
+    errors: &[String],
+    previous_json: &str,
+    diagnosis: &crate::llm::diagnostics::FailureDiagnosis,
+) -> String {
     let mut prompt = String::from(
         "Your previous answer failed arithmetic validation against the statement's own \
 balances. The validation errors are:\n",
@@ -41,13 +46,17 @@ balances. The validation errors are:\n",
     for error in errors {
         prompt.push_str(&format!("- {}\n", error));
     }
+    if !diagnosis.hints.is_empty() {
+        prompt.push_str(&format!("\nDiagnosis ({}):\n", diagnosis.pattern));
+        for hint in &diagnosis.hints {
+            prompt.push_str(&format!("- {}\n", hint));
+        }
+    }
     prompt.push_str(&format!(
         "\nYour previous answer was:\n{}\n\n\
-Fix the errors and return the complete corrected JSON object only. Typical causes: a misread \
-digit, a flipped sign (negative = money out), a dropped or duplicated transaction row, or \
-rows in the wrong order. Check that every transaction appears exactly once, that each \
-running balance equals the previous balance plus the amount, and that the total reaches the \
-stated closing balance.",
+Fix the errors and return the complete corrected JSON object only. Check that every \
+transaction appears exactly once, that each running balance equals the previous balance \
+plus the amount, and that the total reaches the stated closing balance.",
         previous_json
     ));
     prompt

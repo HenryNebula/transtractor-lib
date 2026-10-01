@@ -13,6 +13,7 @@
 
 pub mod client;
 pub mod config;
+pub mod diagnostics;
 pub mod prompt;
 pub mod schema;
 
@@ -173,7 +174,7 @@ fn llm_request_to_statement_data(
             )
         })?;
         let provenance = format!("{}/{}", PROVENANCE_PREFIX, config.model);
-        let mut data = statement.to_statement_data(&provenance)?;
+        let mut data = statement.clone().to_statement_data(&provenance)?;
 
         // Identical post-processing to the rules engine: fixers backfill
         // implicit balances/dates and correct amount signs, then the checkers
@@ -196,12 +197,14 @@ fn llm_request_to_statement_data(
 
         if attempt + 1 < attempts {
             // Feed the failing attempt back: assistant answer, then the
-            // checker errors naming the offending rows.
+            // checker errors plus a pattern-driven diagnosis naming the
+            // likely culprit rows.
+            let diagnosis = diagnostics::diagnose(&errors, &statement);
             if let Some(conversation) = messages.as_array_mut() {
                 conversation.push(json!({ "role": "assistant", "content": content }));
                 conversation.push(json!({
                     "role": "user",
-                    "content": prompt::correction_prompt(&errors, &json_str),
+                    "content": prompt::correction_prompt(&errors, &json_str, &diagnosis),
                 }));
             }
         }
@@ -387,12 +390,17 @@ mod tests {
         assert_eq!(data.proto_transactions.len(), 2);
 
         // The second request continues the conversation: assistant answer,
-        // then a user message quoting the checker errors.
+        // then a user message quoting the checker errors plus the
+        // pattern-driven diagnosis (this fixture is a final-only gap of 100,
+        // which is twice the 50.00 Deposit — a sign-flip candidate).
         let requests = server.requests();
         assert_eq!(requests.len(), 2);
         assert!(requests[1].contains("\"role\":\"assistant\""));
         assert!(requests[1].contains("failed arithmetic validation"));
         assert!(requests[1].contains("balance mismatch"));
+        assert!(requests[1].contains("Diagnosis (final-only-total-gap)"));
+        assert!(requests[1].contains("sign may be flipped"));
+        assert!(requests[1].contains("transaction 2"));
     }
 
     #[test]
