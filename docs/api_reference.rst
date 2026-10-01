@@ -17,6 +17,19 @@ The main entry point for parsing bank statement PDFs.
    .. automethod:: __init__
 
 
+LlmConfig
+---------
+
+Configuration for the optional local LLM fallback. See :doc:`llm` for details.
+
+.. autoclass:: transtractor.llm.LlmConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   .. automethod:: __init__
+
+
 StatementData
 -------------
 

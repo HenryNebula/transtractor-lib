@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["python-bindings"]
 python-bindings = ["dep:pyo3"]
 wasm-bindings = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen"]
+llm = ["dep:ureq"]
 
 [dependencies]
 chrono = "0.4.45"
@@ -23,3 +24,6 @@ pyo3 = { version = "0.29.2", optional = true }
 pdfsink-rs = "0.2.19"
 wasm-bindgen = { version = "0.2.129", optional = true }
 serde-wasm-bindgen = { version = "0.6.5", optional = true }
+# Blocking, plain-HTTP client for the opt-in local LLM fallback. No TLS
+# dependencies are pulled in; the feature targets local inference endpoints.
+ureq = { version = "3", optional = true, default-features = false }

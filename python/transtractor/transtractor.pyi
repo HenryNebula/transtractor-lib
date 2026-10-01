@@ -23,13 +23,68 @@ class LibParser:
         :return: List of deprecation warnings
         """
 
+    def configure_llm(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        timeout_secs: int = 120,
+        schema_mode: bool = True,
+    ) -> None:
+        """
+        Configure an OpenAI-compatible local inference endpoint used as the
+        fallback when the rules engine cannot parse a statement.
+
+        Only present when the library is built with the `llm` cargo feature.
+
+        :param base_url: Endpoint base URL including the `/v1` prefix,
+            e.g. `http://127.0.0.1:8080/v1`
+        :param model: Model name expected by the endpoint
+        :param api_key: Optional Bearer token (llama-server `--api-key`)
+        :param timeout_secs: Global request timeout in seconds
+        :param schema_mode: Attempt `response_format: json_schema` guided decoding
+        """
+
+    def is_llm_configured(self) -> bool:
+        """
+        Whether an LLM fallback endpoint is configured.
+
+        Only present when the library is built with the `llm` cargo feature.
+        """
+
+    def py_pdf_path_has_text_layer(self, py_pdf_path: str) -> bool:
+        """
+        Check whether the PDF has a usable text layer. Statements without one
+        (scans) should be processed via page images with
+        `py_pdf_path_to_py_statement_data_with_images`.
+
+        :param py_pdf_path: Path to the PDF file
+        """
+
     def py_pdf_path_to_py_statement_data(self, py_pdf_path: str) -> StatementData:
         """
         Process a PDF file path from Python caller and return a Python StatementData
         object.
 
+        Falls back to the configured local LLM endpoint when the rules engine
+        cannot parse the statement.
+
         :param py_pdf_path: Path to the PDF file
         :raises ParseError: If statement is not recognisable or not parsed correctly
+        """
+
+    def py_pdf_path_to_py_statement_data_with_images(
+        self, py_pdf_path: str, py_images: list[tuple[str, str]]
+    ) -> StatementData:
+        """
+        Process a scanned PDF via caller-supplied page images using a local
+        vision LLM endpoint.
+
+        Only present when the library is built with the `llm` cargo feature.
+
+        :param py_pdf_path: Path to the PDF file
+        :param py_images: `(base64_data, mime_type)` tuples, one per page, in order
+        :raises ParseError: If extraction fails or the numbers do not reconcile
         """
 
     def py_pdf_path_to_layout(self, py_pdf_path: str, py_layout_path: str) -> None:

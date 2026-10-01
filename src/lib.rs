@@ -2,6 +2,8 @@ pub mod checkers;
 pub mod configs;
 pub mod fixers;
 pub mod formats;
+#[cfg(feature = "llm")]
+pub mod llm;
 pub mod parser;
 pub mod parsers;
 #[cfg(feature = "python-bindings")]

@@ -3,8 +3,10 @@
 import warnings
 from typing import cast
 
+from .llm import LlmConfig
 from .structs.statement_data import StatementData
 from .transtractor import LibParser
+from .utils.rendering import render_pdf_pages
 from .utils.testing import run_test_protocol
 
 
@@ -17,28 +19,81 @@ class Parser:
     can also load custom configurations from JSON files for additional statement
     formats.
 
+    When an ``llm`` fallback is configured (via the ``llm`` argument or the
+    ``TRANSTRACTOR_LLM_*`` environment variables) and the rules engine cannot
+    parse a statement, the statement is sent to a local OpenAI-compatible
+    inference endpoint. Scanned statements without a text layer are rendered
+    to page images and processed by the vision path. LLM output is always
+    validated against the statement's opening/closing balances; extractions
+    that do not reconcile raise :class:`ParseError`.
+
     Example:
         parser = Parser()
         parser.load('custom_config.json')
         statement_data = parser.parse('statement.pdf')
         print(statement_data)
         statement_data.to_csv('output.csv')
+
+    Example with local LLM fallback:
+        from transtractor import LlmConfig, Parser
+
+        parser = Parser(llm=LlmConfig(
+            base_url="http://127.0.0.1:8080/v1",
+            model="qwen2.5-vl-7b-instruct",
+        ))
+        statement_data = parser.parse('statement.pdf')
     """
 
-    def __init__(self):
-        """Initialise the Parser with default database."""
+    def __init__(self, llm: LlmConfig | None = None):
+        """Initialise the Parser with default database.
+
+        :param llm: Optional local LLM fallback configuration; when omitted,
+            the ``TRANSTRACTOR_LLM_*`` environment variables are consulted
+        """
         self._inner = LibParser()
+        self._llm = llm or LlmConfig.from_env()
+        if self._llm is not None:
+            self._inner.configure_llm(
+                self._llm.base_url,
+                self._llm.model,
+                self._llm.api_key,
+                self._llm.timeout_secs,
+                self._llm.schema_mode,
+            )
+
+    @property
+    def llm_config(self) -> LlmConfig | None:
+        """The active local LLM fallback configuration, if any."""
+        return self._llm
 
     def parse(self, pdf_file_path: str) -> StatementData:
         """Parse the bank statement PDF and return a StatementData object.
+
+        With an LLM fallback configured, scanned PDFs without a text layer
+        are rendered to page images (requires the ``transtractor[llm]``
+        extra) and parsed via the local vision model; everything else falls
+        back to the LLM text path only when the rules engine fails.
 
         :param pdf_file_path: Path to the PDF file to be processed
         :return: StatementData object representing the parsed bank statement data
         :raises ParseError: If statement is not recognisable or not parsed correctly
         """
-        sd: StatementData = cast(
-            StatementData, self._inner.py_pdf_path_to_py_statement_data(pdf_file_path)
-        )
+        sd: StatementData
+        if self._llm is not None and not self._inner.py_pdf_path_has_text_layer(
+            pdf_file_path
+        ):
+            images = render_pdf_pages(pdf_file_path)
+            sd = cast(
+                StatementData,
+                self._inner.py_pdf_path_to_py_statement_data_with_images(
+                    pdf_file_path, images
+                ),
+            )
+        else:
+            sd = cast(
+                StatementData,
+                self._inner.py_pdf_path_to_py_statement_data(pdf_file_path),
+            )
         sd.filename = pdf_file_path
         return sd
 

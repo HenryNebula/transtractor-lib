@@ -154,6 +154,7 @@ Documentation
    installation
    supported_statements
    configuration
+   llm
    api_reference
 
 

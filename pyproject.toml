@@ -38,6 +38,10 @@ classifiers = [
 dynamic = ["version"]
 dependencies = []
 
+[project.optional-dependencies]
+# Page rendering for the LLM vision fallback on scanned statements.
+llm = ["pypdfium2>=4", "pillow>=10"]
+
 [dependency-groups]
 dev = [
     "defusedxml",
@@ -61,7 +65,10 @@ Repository = "https://github.com/weberdak/transtractor-lib"
 Issues = "https://github.com/weberdak/transtractor-lib/issues"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+# The `llm` feature bundles the local LLM fallback into Python builds so the
+# compiled extension can talk to local OpenAI-compatible endpoints. The cargo
+# feature remains off by default for pure-Rust and wasm consumers.
+features = ["pyo3/extension-module", "llm"]
 python-source = "python"
 
 [tool.pyright]

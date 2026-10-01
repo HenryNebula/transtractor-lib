@@ -1,4 +1,6 @@
 use crate::configs::db::ConfigDB;
+#[cfg(feature = "llm")]
+use crate::llm::{ImageInput, LlmConfig};
 use crate::parsers::flows::layout_to_text_items::layout_to_text_items;
 use crate::parsers::flows::pdf_to_text_items::pdf_to_text_items;
 use crate::parsers::flows::text_items_to_debug::text_items_to_debug_with_benchmark;
@@ -19,6 +21,16 @@ fn py_pdf_path_to_text_items(py_pdf_path: &Bound<'_, PyAny>) -> PyResult<Vec<Tex
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to open PDF document: {}", e)))?;
     pdf_to_text_items(&pdf_document)
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to convert PDF to text items: {}", e)))
+}
+
+/// Minimum number of text items for a PDF to be treated as having a usable
+/// text layer; below this heuristic threshold the document is a scan and the
+/// vision path should be used instead.
+const MIN_TEXT_ITEMS_FOR_TEXT_LAYER: usize = 20;
+
+/// Heuristic: does this PDF carry a usable (non-empty) text layer?
+fn has_usable_text_layer(text_items: &[TextItem]) -> bool {
+    text_items.len() >= MIN_TEXT_ITEMS_FOR_TEXT_LAYER
 }
 
 /// Helper to write Rust string to text file to path specified by Python caller.
@@ -53,6 +65,52 @@ pub struct LibParser {
     db: ConfigDB,
     /// Last deprecation warnings from config loading
     last_deprecation_warnings: Vec<String>,
+    /// Optional local LLM fallback configuration (requires the `llm` feature).
+    /// Nothing is sent to an endpoint unless this is set.
+    #[cfg(feature = "llm")]
+    llm: Option<LlmConfig>,
+}
+
+/// Non-exposed helpers shared by the pymethods.
+impl LibParser {
+    /// Run the rules pipeline, falling back to the configured local LLM text
+    /// path when the rules engine cannot identify or parse the statement.
+    fn statement_data_with_llm_fallback(
+        &self,
+        py: Python<'_>,
+        text_items: &Vec<TextItem>,
+        benchmark: &mut Benchmark,
+    ) -> Result<crate::structs::StatementData, String> {
+        text_items_to_statement_data_with_benchmark(&self.db, text_items, benchmark)
+            .or_else(|rules_error| self.llm_text_fallback(py, rules_error, text_items))
+    }
+
+    #[cfg(feature = "llm")]
+    fn llm_text_fallback(
+        &self,
+        py: Python<'_>,
+        rules_error: String,
+        text_items: &[TextItem],
+    ) -> Result<crate::structs::StatementData, String> {
+        match &self.llm {
+            // The GIL is released for the blocking inference call so other
+            // Python threads (or an in-process HTTP server) keep running.
+            Some(config) => {
+                py.detach(|| crate::llm::llm_text_items_to_statement_data(config, text_items))
+            }
+            None => Err(rules_error),
+        }
+    }
+
+    #[cfg(not(feature = "llm"))]
+    fn llm_text_fallback(
+        &self,
+        _py: Python<'_>,
+        rules_error: String,
+        _text_items: &[TextItem],
+    ) -> Result<crate::structs::StatementData, String> {
+        Err(rules_error)
+    }
 }
 
 #[pymethods]
@@ -63,7 +121,46 @@ impl LibParser {
         Self {
             db: ConfigDB::new(),
             last_deprecation_warnings: Vec::new(),
+            #[cfg(feature = "llm")]
+            llm: None,
         }
+    }
+
+    /// Configure an OpenAI-compatible local inference endpoint used as the
+    /// fallback when the rules engine cannot parse a statement. Requires the
+    /// `llm` cargo feature; raises RuntimeError when the library was built
+    /// without it.
+    #[cfg(feature = "llm")]
+    #[pyo3(signature = (base_url, model, api_key=None, timeout_secs=120, schema_mode=true))]
+    pub fn configure_llm(
+        &mut self,
+        base_url: &str,
+        model: &str,
+        api_key: Option<&str>,
+        timeout_secs: u64,
+        schema_mode: bool,
+    ) -> PyResult<()> {
+        let mut config = LlmConfig::new(base_url, model);
+        config.api_key = api_key.map(|key| key.to_string());
+        config.timeout_secs = timeout_secs;
+        config.schema_mode = schema_mode;
+        self.llm = Some(config);
+        Ok(())
+    }
+
+    /// Whether an LLM fallback endpoint is configured.
+    #[cfg(feature = "llm")]
+    pub fn is_llm_configured(&self) -> bool {
+        self.llm.is_some()
+    }
+
+    /// Check whether the PDF has a usable text layer. Statements without one
+    /// (scans) cannot use the text-based rules engine or LLM text path and
+    /// should be processed via page images with
+    /// `py_pdf_path_to_py_statement_data_with_images`.
+    pub fn py_pdf_path_has_text_layer(&self, py_pdf_path: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let text_items = py_pdf_path_to_text_items(py_pdf_path)?;
+        Ok(has_usable_text_layer(&text_items))
     }
 
     /// Get deprecation warnings from the last loaded configuration
@@ -96,6 +193,7 @@ impl LibParser {
     /// StatementData.
     pub fn py_layout_path_to_py_statement_data(
         &self,
+        py: Python<'_>,
         py_layout_path: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let mut benchmark = Benchmark::new();
@@ -104,9 +202,9 @@ impl LibParser {
         let py_layout_str = file_to_str(py_layout_path)?;
         let text_items = layout_to_text_items(&py_layout_str).map_err(PyRuntimeError::new_err)?;
         benchmark.pdf_extractor.pause();
-        let data =
-            text_items_to_statement_data_with_benchmark(&self.db, &text_items, &mut benchmark)
-                .map_err(ParseError::new_err)?;
+        let data = self
+            .statement_data_with_llm_fallback(py, &text_items, &mut benchmark)
+            .map_err(ParseError::new_err)?;
         utils::rust_statement_data_to_py_statement_data(&data)
     }
 
@@ -155,8 +253,14 @@ impl LibParser {
     }
 
     /// Process a PDF file path from Python caller and return a Python StatementData object.
+    ///
+    /// When an LLM fallback is configured and the rules engine cannot parse
+    /// the statement, the extracted text is sent to the local endpoint and
+    /// the response is validated through the standard fixer and checker
+    /// pipeline before being returned.
     pub fn py_pdf_path_to_py_statement_data(
         &self,
+        py: Python<'_>,
         py_pdf_path: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let mut benchmark = Benchmark::new();
@@ -164,9 +268,38 @@ impl LibParser {
         benchmark.pdf_extractor.start();
         let text_items = py_pdf_path_to_text_items(py_pdf_path)?;
         benchmark.pdf_extractor.pause();
-        let data =
-            text_items_to_statement_data_with_benchmark(&self.db, &text_items, &mut benchmark)
-                .map_err(ParseError::new_err)?;
+        let data = self
+            .statement_data_with_llm_fallback(py, &text_items, &mut benchmark)
+            .map_err(ParseError::new_err)?;
+        utils::rust_statement_data_to_py_statement_data(&data)
+    }
+
+    /// Process a scanned PDF via caller-supplied page images using a local
+    /// vision LLM endpoint (requires the `llm` feature). Images are
+    /// `(base64_data, mime_type)` tuples, one per page, in order. The result
+    /// is validated through the standard fixer and checker pipeline.
+    #[cfg(feature = "llm")]
+    pub fn py_pdf_path_to_py_statement_data_with_images(
+        &self,
+        py: Python<'_>,
+        py_pdf_path: &Bound<'_, PyAny>,
+        py_images: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let rust_pdf_path = py_pdf_path.extract::<String>()?;
+        let Some(config) = &self.llm else {
+            return Err(PyRuntimeError::new_err(format!(
+                "LLM fallback is not configured; call configure_llm before parsing {} with images",
+                rust_pdf_path
+            )));
+        };
+        let images: Vec<ImageInput> = py_images
+            .into_iter()
+            .map(|(b64, mime)| ImageInput::new(b64, mime))
+            .collect();
+        // The GIL is released for the blocking vision inference call.
+        let data = py
+            .detach(|| crate::llm::llm_images_to_statement_data(config, &images))
+            .map_err(ParseError::new_err)?;
         utils::rust_statement_data_to_py_statement_data(&data)
     }
 

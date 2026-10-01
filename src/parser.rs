@@ -1,6 +1,8 @@
 //! Rust-native mirror of the Python `Parser` wrapper class.
 
 use crate::configs::db::ConfigDB;
+#[cfg(feature = "llm")]
+use crate::llm::LlmConfig;
 use crate::parsers::flows::layout_to_text_items::layout_to_text_items;
 use crate::parsers::flows::pdf_to_text_items::pdf_to_text_items;
 use crate::parsers::flows::text_items_to_debug::text_items_to_debug_with_benchmark;
@@ -46,6 +48,10 @@ pub struct Parser {
     db: ConfigDB,
     /// Deprecation warnings emitted by the most recent call to `load`
     last_deprecation_warnings: Vec<String>,
+    /// Optional local LLM fallback configuration (requires the `llm` feature).
+    /// Nothing is sent to an endpoint unless this is set.
+    #[cfg(feature = "llm")]
+    llm: Option<LlmConfig>,
 }
 
 impl Parser {
@@ -54,7 +60,23 @@ impl Parser {
         Self {
             db: ConfigDB::new(),
             last_deprecation_warnings: Vec::new(),
+            #[cfg(feature = "llm")]
+            llm: None,
         }
+    }
+
+    /// Enable the local LLM fallback for statements the rules engine cannot
+    /// parse (requires the `llm` feature). Returns the parser for chaining.
+    #[cfg(feature = "llm")]
+    pub fn with_llm(mut self, config: LlmConfig) -> Self {
+        self.llm = Some(config);
+        self
+    }
+
+    /// The configured local LLM fallback, if any (requires the `llm` feature).
+    #[cfg(feature = "llm")]
+    pub fn llm_config(&self) -> Option<&LlmConfig> {
+        self.llm.as_ref()
     }
 
     /// Get deprecation warnings from the last loaded configuration.
@@ -83,7 +105,7 @@ impl Parser {
         benchmark.pdf_extractor.start();
         let text_items = pdf_path_to_text_items(pdf_file_path)?;
         benchmark.pdf_extractor.pause();
-        text_items_to_statement_data_with_benchmark(&self.db, &text_items, &mut benchmark)
+        self.statement_data_with_llm_fallback(text_items, &mut benchmark)
     }
 
     /// Parse the bank statement layout file and return a `StatementData`.
@@ -93,7 +115,43 @@ impl Parser {
         benchmark.pdf_extractor.start();
         let text_items = layout_path_to_text_items(layout_file_path)?;
         benchmark.pdf_extractor.pause();
-        text_items_to_statement_data_with_benchmark(&self.db, &text_items, &mut benchmark)
+        self.statement_data_with_llm_fallback(text_items, &mut benchmark)
+    }
+
+    /// Run the rules pipeline, falling back to the configured local LLM text
+    /// path when the rules engine cannot identify or parse the statement.
+    fn statement_data_with_llm_fallback(
+        &self,
+        text_items: Vec<TextItem>,
+        benchmark: &mut Benchmark,
+    ) -> Result<StatementData, String> {
+        match text_items_to_statement_data_with_benchmark(&self.db, &text_items, benchmark) {
+            Ok(data) => Ok(data),
+            Err(rules_error) => self.llm_text_fallback(rules_error, &text_items),
+        }
+    }
+
+    /// Apply the LLM text fallback, or surface the original rules error when
+    /// no fallback is available.
+    #[cfg(feature = "llm")]
+    fn llm_text_fallback(
+        &self,
+        rules_error: String,
+        text_items: &[TextItem],
+    ) -> Result<StatementData, String> {
+        match &self.llm {
+            Some(config) => crate::llm::llm_text_items_to_statement_data(config, text_items),
+            None => Err(rules_error),
+        }
+    }
+
+    #[cfg(not(feature = "llm"))]
+    fn llm_text_fallback(
+        &self,
+        rules_error: String,
+        _text_items: &[TextItem],
+    ) -> Result<StatementData, String> {
+        Err(rules_error)
     }
 
     /// Write a summary of the statement data and quality checks for each
@@ -410,6 +468,47 @@ mod tests {
         let parser = Parser::new();
         let result = parser.parse(&fixture("test1.pdf"));
         assert!(result.is_err(), "Expected parse to fail without a config");
+    }
+
+    #[cfg(feature = "llm")]
+    #[test]
+    fn test_parse_falls_back_to_llm_when_rules_fail() {
+        use crate::llm::{LlmConfig, mock_server::MockServer};
+
+        let statement = serde_json::json!({
+            "account_number": "1234 5678 9123 4567",
+            "start_date": "2025-01-01",
+            "opening_balance": 1000.0,
+            "closing_balance": 900.0,
+            "transactions": [
+                { "date": "2025-01-02", "description": "Payment", "amount": -100.0, "balance": 900.0 }
+            ]
+        });
+        let completion = serde_json::json!({
+            "choices": [ { "message": { "role": "assistant", "content": statement.to_string() } } ]
+        });
+        let server = MockServer::start(vec![(200, completion.to_string())]);
+
+        // No rules config is loaded, so the rules engine fails and the
+        // configured LLM fallback handles the statement.
+        let parser = Parser::new().with_llm(LlmConfig::new(server.url.clone(), "mock-model"));
+        let statement_data = parser
+            .parse(&fixture("test1.pdf"))
+            .expect("Expected LLM fallback to succeed");
+
+        assert_eq!(statement_data.key.as_deref(), Some("llm/mock-model"));
+        assert_eq!(statement_data.opening_balance, Some(1000.0));
+        assert!(statement_data.errors.is_empty());
+    }
+
+    #[cfg(feature = "llm")]
+    #[test]
+    fn test_parse_without_llm_config_returns_rules_error() {
+        let parser = Parser::new();
+        let error = parser
+            .parse(&fixture("test1.pdf"))
+            .expect_err("Expected rules failure to surface");
+        assert!(error.contains("cannot be identified"), "got: {}", error);
     }
 
     #[test]

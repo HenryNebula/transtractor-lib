@@ -21,8 +21,34 @@ The Transtractor is a rules-based PDF bank statement parser for extracting struc
 * Process statements at a throughput of 10 to 20 statements per second on average
 * Run locally without sending financial documents to an external AI service
 * Use the same core parser in Python applications or browser-based WebAssembly integrations
+* Fall back to a local LLM endpoint (llama-server/vLLM/Ollama, optional `llm` feature) for unsupported banks and scanned statements — output is balance-validated or rejected
 
 Each supported statement format is implemented as a lightweight configuration module. This design keeps the parser portable and extensible while making its output predictable and suitable for downstream processing, reporting, and financial analysis.
+
+### Local LLM fallback (optional)
+
+When the rules engine cannot parse a statement (unknown bank format, or a scan with no
+text layer), an optional fallback sends the statement to a local OpenAI-compatible
+endpoint — everything stays on the machine, plain HTTP only. The model's extraction
+runs through the same balance validation as the rules engine: numbers that do not
+reconcile with the opening and closing balances raise a `ParseError` rather than
+returning wrong data. Statements extracted this way carry the key `llm/<model>`.
+
+```shell
+pip install 'transtractor[llm]'
+```
+
+```python
+from transtractor import LlmConfig, Parser
+
+parser = Parser(llm=LlmConfig(
+    base_url="http://127.0.0.1:8080/v1",
+    model="qwen2.5-vl-7b-instruct",  # vision models also cover scanned statements
+))
+parser.parse('statement.pdf').to_csv('statement.csv')
+```
+
+See the [local LLM fallback documentation](https://transtractor-lib.readthedocs.io/en/latest/llm.html) for details.
 
 ## Installation
 ### Install from PyPI
