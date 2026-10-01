@@ -90,6 +90,23 @@ How it works
 If validation fails, the error message lists each mismatching transaction
 (the same messages the debug output produces) and no data is returned.
 
+Thinking models (Qwen3-style)
+-----------------------------
+
+Qwen3-style hybrid thinking models spend the token budget reasoning before
+answering, which on a small context window leaves an empty answer. llama-server
+exposes the chat-template switch for this; enable it with ``no_think=True``:
+
+.. code-block:: python
+
+   parser = Parser(llm=LlmConfig(
+       base_url="http://127.0.0.1:8080/v1",
+       model="Qwen_Qwen3.5-4B-Q8_0.gguf",
+       no_think=True,
+   ))
+
+or ``TRANSTRACTOR_LLM_NO_THINK=1`` via the environment.
+
 Limitations
 -----------
 

@@ -131,7 +131,7 @@ impl LibParser {
     /// `llm` cargo feature; raises RuntimeError when the library was built
     /// without it.
     #[cfg(feature = "llm")]
-    #[pyo3(signature = (base_url, model, api_key=None, timeout_secs=120, schema_mode=true))]
+    #[pyo3(signature = (base_url, model, api_key=None, timeout_secs=120, schema_mode=true, no_think=false))]
     pub fn configure_llm(
         &mut self,
         base_url: &str,
@@ -139,11 +139,13 @@ impl LibParser {
         api_key: Option<&str>,
         timeout_secs: u64,
         schema_mode: bool,
+        no_think: bool,
     ) -> PyResult<()> {
         let mut config = LlmConfig::new(base_url, model);
         config.api_key = api_key.map(|key| key.to_string());
         config.timeout_secs = timeout_secs;
         config.schema_mode = schema_mode;
+        config.no_think = no_think;
         self.llm = Some(config);
         Ok(())
     }

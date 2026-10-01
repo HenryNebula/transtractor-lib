@@ -95,7 +95,7 @@ pub fn llm_response_json_schema() -> serde_json::Value {
         "properties": {
             "account_number": {
                 "type": "string",
-                "description": "Account number as printed on the statement"
+                "description": "Account number copied exactly as printed, preserving any spaces or dashes"
             },
             "start_date": {
                 "type": "string",

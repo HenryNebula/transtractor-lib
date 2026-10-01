@@ -23,11 +23,17 @@ pub struct LlmConfig {
     /// Attempt `response_format: json_schema` guided decoding first, retrying
     /// once without it if the endpoint rejects the parameter
     pub schema_mode: bool,
+    /// Send `chat_template_kwargs: {"enable_thinking": false}` with each
+    /// request. Required for Qwen3-style thinking models served by
+    /// llama-server, which otherwise spend the token budget reasoning and
+    /// return an empty answer.
+    pub no_think: bool,
 }
 
 impl LlmConfig {
     /// Build a config for the given endpoint and model with default settings
-    /// (no API key, 120s timeout, temperature 0, schema mode on).
+    /// (no API key, 120s timeout, temperature 0, schema mode on, thinking
+    /// enabled).
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
             base_url: normalise_base_url(&base_url.into()),
@@ -36,6 +42,7 @@ impl LlmConfig {
             timeout_secs: 120,
             temperature: 0.0,
             schema_mode: true,
+            no_think: false,
         }
     }
 
@@ -53,6 +60,12 @@ impl LlmConfig {
             && !key.trim().is_empty()
         {
             config.api_key = Some(key);
+        }
+        // Qwen3-style thinking models need thinking disabled for extraction.
+        if let Ok(flag) = std::env::var("TRANSTRACTOR_LLM_NO_THINK")
+            && flag.trim().eq_ignore_ascii_case("1")
+        {
+            config.no_think = true;
         }
         Some(config)
     }
@@ -108,6 +121,7 @@ mod tests {
         assert_eq!(config.timeout_secs, 120);
         assert_eq!(config.temperature, 0.0);
         assert!(config.schema_mode);
+        assert!(!config.no_think);
         assert_eq!(config.api_key, None);
     }
 

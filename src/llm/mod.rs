@@ -102,6 +102,11 @@ fn build_request_body(config: &LlmConfig, user_content: Value) -> Value {
             },
         });
     }
+    if config.no_think {
+        // Qwen3-style thinking models burn the token budget reasoning before
+        // answering; llama-server exposes the chat-template switch to stop it.
+        body["chat_template_kwargs"] = json!({ "enable_thinking": false });
+    }
     body
 }
 
@@ -307,6 +312,28 @@ mod tests {
         let requests = server.requests();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].contains("data:image/png;base64,aGVsbG8="));
+    }
+
+    #[test]
+    fn test_no_think_sends_chat_template_kwargs() {
+        let server = MockServer::start(vec![(200, completion_body(&valid_statement_json()))]);
+        let mut config = LlmConfig::new(server.url.clone(), "mock-model");
+        config.no_think = true;
+
+        llm_text_items_to_statement_data(&config, &sample_items())
+            .expect("Expected extraction to succeed");
+
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].contains("chat_template_kwargs"));
+        assert!(requests[0].contains("enable_thinking"));
+
+        // Without the flag the field must be absent.
+        let server = MockServer::start(vec![(200, completion_body(&valid_statement_json()))]);
+        let config = LlmConfig::new(server.url.clone(), "mock-model");
+        llm_text_items_to_statement_data(&config, &sample_items())
+            .expect("Expected extraction to succeed");
+        assert!(!server.requests()[0].contains("chat_template_kwargs"));
     }
 
     #[test]

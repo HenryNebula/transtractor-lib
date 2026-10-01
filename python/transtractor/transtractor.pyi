@@ -30,6 +30,7 @@ class LibParser:
         api_key: str | None = None,
         timeout_secs: int = 120,
         schema_mode: bool = True,
+        no_think: bool = False,
     ) -> None:
         """
         Configure an OpenAI-compatible local inference endpoint used as the
@@ -43,6 +44,7 @@ class LibParser:
         :param api_key: Optional Bearer token (llama-server `--api-key`)
         :param timeout_secs: Global request timeout in seconds
         :param schema_mode: Attempt `response_format: json_schema` guided decoding
+        :param no_think: Disable thinking for Qwen3-style models
         """
 
     def is_llm_configured(self) -> bool:

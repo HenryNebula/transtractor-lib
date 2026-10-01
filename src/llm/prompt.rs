@@ -9,6 +9,7 @@ the closing balance, and every transaction row (date, description, amount, runni
 when shown) from the provided document.\n\
 Rules:\n\
 - Copy numbers exactly as printed; ignore thousand separators and currency symbols.\n\
+- Copy the account number exactly as printed, including any spaces or dashes.\n\
 - Output amounts as plain decimal numbers with a sign: negative for money leaving the \
 account, positive for money coming in.\n\
 - Use ISO dates (YYYY-MM-DD).\n\

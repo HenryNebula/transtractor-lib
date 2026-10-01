@@ -36,6 +36,10 @@ class LlmConfig:
     :param schema_mode: Attempt ``response_format: json_schema`` guided
         decoding first, retrying without it if the endpoint rejects the
         parameter
+    :param no_think: Send ``chat_template_kwargs: {"enable_thinking": false}``
+        with each request. Required for Qwen3-style thinking models served by
+        llama-server, which otherwise spend the token budget reasoning and
+        return an empty answer
     """
 
     base_url: str
@@ -43,6 +47,7 @@ class LlmConfig:
     api_key: str | None = None
     timeout_secs: int = 120
     schema_mode: bool = True
+    no_think: bool = False
 
     @classmethod
     def from_env(cls) -> LlmConfig | None:
@@ -56,8 +61,10 @@ class LlmConfig:
         if not base_url or not model:
             return None
         api_key = os.environ.get(ENV_API_KEY, "").strip() or None
+        no_think = os.environ.get("TRANSTRACTOR_LLM_NO_THINK", "").strip() == "1"
         return cls(
             base_url=base_url,
             model=model,
             api_key=api_key,
+            no_think=no_think,
         )
