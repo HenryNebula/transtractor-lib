@@ -16,6 +16,16 @@ class LibParser:
         :raises ConfigLoadError: If the configuration file cannot be loaded
         """
 
+    def register_config_from_json_str(self, json_str: str) -> list[str]:
+        """
+        Register a configuration from a JSON string, update the
+        StatementTyper and return any deprecation warnings.
+
+        :param json_str: The configuration JSON text
+        :return: List of deprecation warnings
+        :raises ConfigLoadError: If the configuration is invalid
+        """
+
     def get_deprecation_warnings(self) -> list[str]:
         """
         Get deprecation warnings from the last loaded configuration.

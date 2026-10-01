@@ -188,6 +188,22 @@ class Parser:
                 stacklevel=2,
             )
 
+    def load_str(self, config_json: str) -> None:
+        """Load a custom parsing configuration from a JSON string.
+
+        Same semantics as :meth:`load`, but takes the configuration text
+        directly — for tooling that drafts configurations programmatically.
+
+        :param config_json: The configuration JSON text
+        :raises ConfigLoadError: Configuration is invalid
+        """
+        for warning_msg in self._inner.register_config_from_json_str(config_json):
+            warnings.warn(
+                f"Configuration uses deprecated field: {warning_msg}",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
     def spec(self, pdf_file_path: str, output_file: str) -> None:
         """Extract and write a JSON I/O spec representation of a PDF file.
 

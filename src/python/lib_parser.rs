@@ -182,15 +182,28 @@ impl LibParser {
         py_config_json_path: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let json_str = file_to_str(py_config_json_path)?;
+        self.register_config_from_json_str_inner(&json_str)?;
+        Ok(())
+    }
 
+    /// Register a configuration from a JSON string (rather than a file path),
+    /// update the StatementTyper and return any deprecation warnings. Used by
+    /// tooling that drafts configurations programmatically.
+    pub fn register_config_from_json_str(&mut self, json_str: &str) -> PyResult<Vec<String>> {
+        let warnings = self.register_config_from_json_str_inner(json_str)?;
+        Ok(warnings)
+    }
+
+    /// Shared registration path for the file- and string-based loaders.
+    fn register_config_from_json_str_inner(&mut self, json_str: &str) -> PyResult<Vec<String>> {
         // Clear previous warnings
         self.last_deprecation_warnings.clear();
 
         // Register and get deprecation warnings
-        match self.db.register_from_str_with_warnings(&json_str) {
+        match self.db.register_from_str_with_warnings(json_str) {
             Ok(warnings) => {
-                self.last_deprecation_warnings = warnings;
-                Ok(())
+                self.last_deprecation_warnings = warnings.clone();
+                Ok(warnings)
             }
             Err(e) => Err(ConfigLoadError::new_err(e)),
         }
