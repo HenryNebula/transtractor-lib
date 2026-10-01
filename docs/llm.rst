@@ -107,6 +107,30 @@ exposes the chat-template switch for this; enable it with ``no_think=True``:
 
 or ``TRANSTRACTOR_LLM_NO_THINK=1`` via the environment.
 
+Lenient mode for review workflows
+---------------------------------
+
+Strict mode (the default) raises ``ParseError`` when the extraction does not
+reconcile, so unverified numbers never enter downstream systems. For
+review-then-correct pipelines, lenient mode returns the rows anyway with the
+checker errors attached:
+
+.. code-block:: python
+
+   statement_data = parser.parse('statement.pdf', lenient=True)
+   if statement_data.errors:
+       # Near-correct extraction: rows are usable for human correction; each
+       # error names the offending transaction with calculated vs stated
+       # balances, e.g. "Transaction 4 balance mismatch. Calculated: 90350.00,
+       # Stated: -12350.00, Difference: 102700.00".
+       ...
+   else:
+       ...  # reconciled; same guarantee as the rules engine
+
+Transport, schema and conversion failures still raise — lenient mode only
+relaxes the balance-validation gate. The rules engine path is unchanged:
+lenient applies to the LLM fallback (text and vision).
+
 Limitations
 -----------
 

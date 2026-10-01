@@ -10,7 +10,14 @@ from .transaction import Transaction
 
 @dataclass(repr=False, slots=True)
 class StatementData:
-    """Class representing bank statement data."""
+    """Class representing bank statement data.
+
+    ``errors`` is only populated by the lenient LLM parse mode
+    (:meth:`transtractor.Parser.parse` with ``lenient=True``): every
+    validation failure found by the checkers, naming the offending
+    transaction. Empty means the numbers reconciled with the statement's
+    opening and closing balances.
+    """
 
     key: str = ""
     filename: str = ""
@@ -19,6 +26,7 @@ class StatementData:
     opening_balance: float = 0.0
     closing_balance: float = 0.0
     transactions: list[Transaction] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     benchmark: Benchmark = field(default_factory=Benchmark)
 
     def __repr__(self) -> str:

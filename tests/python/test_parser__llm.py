@@ -152,6 +152,38 @@ def test_llm_schema_rejection_is_retried_without_response_format(mock_llm):
     assert "response_format" not in endpoint.requests[1]
 
 
+def test_lenient_parse_returns_rows_with_errors(mock_llm):
+    """Lenient mode returns near-correct rows plus checker errors."""
+    bad_statement = dict(VALID_STATEMENT)
+    bad_statement["closing_balance"] = 800.0  # 1000 - 150 + 50 = 900
+    # Two canned responses: one consumed by the strict attempt below, one by
+    # the lenient attempt (both trigger the LLM fallback on the same PDF).
+    endpoint = mock_llm(
+        [
+            (200, assistant_content(json.dumps(bad_statement))),
+            (200, assistant_content(json.dumps(bad_statement))),
+        ]
+    )
+    parser = Parser(llm=LlmConfig(base_url=endpoint.url, model="mock-model"))
+
+    with pytest.raises(ParseError):
+        parser.parse(str(TEST_PDF))  # strict default still raises
+
+    statement_data = parser.parse(str(TEST_PDF), lenient=True)
+
+    assert statement_data.key == "llm/mock-model"
+    assert len(statement_data.transactions) == 2
+    assert statement_data.errors, "Expected checker errors to be attached"
+    assert "balance mismatch" in statement_data.errors[0]
+
+    # A reconciling extraction comes back error-free even in lenient mode.
+    good = mock_llm([(200, assistant_content(json.dumps(VALID_STATEMENT)))])
+    parser_good = Parser(llm=LlmConfig(base_url=good.url, model="mock-model"))
+    clean = parser_good.parse(str(TEST_PDF), lenient=True)
+    assert clean.errors == []
+    assert len(clean.transactions) == 2
+
+
 def test_without_llm_configuration_rules_errors_are_unchanged():
     """No endpoint configured: the original rules error surfaces."""
     parser = Parser()

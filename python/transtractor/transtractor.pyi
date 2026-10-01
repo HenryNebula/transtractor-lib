@@ -89,6 +89,33 @@ class LibParser:
         :raises ParseError: If extraction fails or the numbers do not reconcile
         """
 
+    def py_pdf_path_to_py_statement_data_lenient(
+        self, py_pdf_path: str
+    ) -> StatementData:
+        """
+        Process a PDF file path leniently: rules engine first, then the local
+        LLM fallback with validation errors attached to the returned
+        StatementData instead of raised.
+
+        Only present when the library is built with the `llm` cargo feature.
+
+        :param py_pdf_path: Path to the PDF file
+        :raises ParseError: Only when no extraction at all is possible
+        """
+
+    def py_pdf_path_to_py_statement_data_with_images_lenient(
+        self, py_pdf_path: str, py_images: list[tuple[str, str]]
+    ) -> StatementData:
+        """
+        Lenient variant of the vision path; validation errors are attached to
+        the returned StatementData instead of raised.
+
+        Only present when the library is built with the `llm` cargo feature.
+
+        :param py_pdf_path: Path to the PDF file
+        :param py_images: `(base64_data, mime_type)` tuples, one per page, in order
+        """
+
     def py_pdf_path_to_layout(self, py_pdf_path: str, py_layout_path: str) -> None:
         """
         Process a PDF file into layout text str.

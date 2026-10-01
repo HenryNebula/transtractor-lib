@@ -34,9 +34,28 @@ pub const PROVENANCE_PREFIX: &str = "llm";
 ///
 /// Suitable for digital statements where the PDF has a text layer. The
 /// extracted lines are rendered as a page-fenced plain-text prompt.
+/// Validation failures (numbers that do not reconcile) are hard errors.
 pub fn llm_text_items_to_statement_data(
     config: &LlmConfig,
     items: &[TextItem],
+) -> Result<StatementData, String> {
+    llm_text_items_to_statement_data_inner(config, items, false)
+}
+
+/// Lenient variant: numbers that fail validation are returned alongside the
+/// checker errors in `StatementData.errors`, for review-then-correct
+/// workflows. Transport, schema and conversion failures are still errors.
+pub fn llm_text_items_to_statement_data_lenient(
+    config: &LlmConfig,
+    items: &[TextItem],
+) -> Result<StatementData, String> {
+    llm_text_items_to_statement_data_inner(config, items, true)
+}
+
+fn llm_text_items_to_statement_data_inner(
+    config: &LlmConfig,
+    items: &[TextItem],
+    lenient: bool,
 ) -> Result<StatementData, String> {
     if items.is_empty() {
         return Err(
@@ -50,17 +69,34 @@ For scanned statements, supply page images via the vision path instead."
         "text": prompt::text_items_to_prompt(items),
     }]);
     let body = build_request_body(config, user_content);
-    llm_request_to_statement_data(config, body)
+    llm_request_to_statement_data(config, body, lenient)
 }
 
 /// Extract statement data from page images via a local vision LLM endpoint.
 ///
 /// Suitable for scanned statements. Images are supplied by the caller (the
 /// Rust core deliberately does not rasterise PDFs); all pages are sent in a
-/// single request, in order.
+/// single request, in order. Validation failures are hard errors.
 pub fn llm_images_to_statement_data(
     config: &LlmConfig,
     images: &[ImageInput],
+) -> Result<StatementData, String> {
+    llm_images_to_statement_data_inner(config, images, false)
+}
+
+/// Lenient variant of the vision path; see
+/// [`llm_text_items_to_statement_data_lenient`].
+pub fn llm_images_to_statement_data_lenient(
+    config: &LlmConfig,
+    images: &[ImageInput],
+) -> Result<StatementData, String> {
+    llm_images_to_statement_data_inner(config, images, true)
+}
+
+fn llm_images_to_statement_data_inner(
+    config: &LlmConfig,
+    images: &[ImageInput],
+    lenient: bool,
 ) -> Result<StatementData, String> {
     if images.is_empty() {
         return Err("LLM vision fallback requires at least one page image.".to_string());
@@ -79,7 +115,7 @@ pub fn llm_images_to_statement_data(
         "text": prompt::vision_prompt(images.len()),
     }));
     let body = build_request_body(config, Value::Array(content));
-    llm_request_to_statement_data(config, body)
+    llm_request_to_statement_data(config, body, lenient)
 }
 
 /// Assemble the chat completion request body for either extraction path.
@@ -112,7 +148,14 @@ fn build_request_body(config: &LlmConfig, user_content: Value) -> Value {
 
 /// Run one extraction request end to end: call the endpoint, parse the
 /// response into an [`schema::LlmStatement`], convert, then fix and check.
-fn llm_request_to_statement_data(config: &LlmConfig, body: Value) -> Result<StatementData, String> {
+/// In strict mode (the default) validation failures are hard errors; in
+/// lenient mode the data is returned with `errors` populated for review
+/// workflows.
+fn llm_request_to_statement_data(
+    config: &LlmConfig,
+    body: Value,
+    lenient: bool,
+) -> Result<StatementData, String> {
     let content = client::chat_completion(config, &body)?;
     let json_str = extract_json(&content)?;
     let statement: schema::LlmStatement = serde_json::from_str(json_str).map_err(|e| {
@@ -130,7 +173,7 @@ fn llm_request_to_statement_data(config: &LlmConfig, body: Value) -> Result<Stat
     fix_statement_data(&mut data);
     check_statement_data(&mut data);
 
-    if !data.errors.is_empty() {
+    if !data.errors.is_empty() && !lenient {
         return Err(format!(
             "LLM extraction failed validation (numbers do not reconcile): {}",
             data.errors.join("; ")
@@ -273,6 +316,65 @@ mod tests {
             .expect_err("Expected validation failure");
         assert!(error.contains("failed validation"), "got: {}", error);
         assert!(error.contains("balance mismatch"), "got: {}", error);
+    }
+
+    #[test]
+    fn test_lenient_mode_returns_rows_with_errors() {
+        let bad_json = json!({
+            "account_number": "1234 5678 9123 4567",
+            "start_date": "2025-01-01",
+            "opening_balance": 1000.0,
+            "closing_balance": 800.0, // Wrong: 1000 - 150 + 50 = 900
+            "transactions": [
+                { "date": "2025-01-02", "description": "Payment", "amount": -150.0, "balance": 850.0 },
+                { "date": "2025-01-03", "description": "Deposit", "amount": 50.0, "balance": 900.0 }
+            ]
+        });
+        let server = MockServer::start(vec![(200, completion_body(&bad_json.to_string()))]);
+        let config = LlmConfig::new(server.url.clone(), "mock-model");
+
+        // Same extraction as the strict test above, but lenient: the rows come
+        // back with the checker errors attached for review workflows.
+        let data = llm_text_items_to_statement_data_lenient(&config, &sample_items())
+            .expect("Expected lenient extraction to succeed");
+        assert_eq!(data.key.as_deref(), Some("llm/mock-model"));
+        assert_eq!(data.proto_transactions.len(), 2);
+        assert!(!data.errors.is_empty());
+        assert!(
+            data.errors[0].contains("balance mismatch"),
+            "got: {:?}",
+            data.errors
+        );
+
+        // A good extraction in lenient mode is simply error-free.
+        let server = MockServer::start(vec![(200, completion_body(&valid_statement_json()))]);
+        let config = LlmConfig::new(server.url.clone(), "mock-model");
+        let data = llm_text_items_to_statement_data_lenient(&config, &sample_items())
+            .expect("Expected lenient extraction to succeed");
+        assert!(data.errors.is_empty());
+    }
+
+    #[test]
+    fn test_lenient_vision_path_returns_rows_with_errors() {
+        let bad_json = json!({
+            "account_number": "1234",
+            "start_date": "2025-01-01",
+            "opening_balance": 1000.0,
+            "closing_balance": 500.0,
+            "transactions": [
+                { "date": "2025-01-02", "description": "Payment", "amount": -100.0, "balance": 900.0 }
+            ]
+        });
+        let server = MockServer::start(vec![(200, completion_body(&bad_json.to_string()))]);
+        let config = LlmConfig::new(server.url.clone(), "mock-model");
+
+        let data = llm_images_to_statement_data_lenient(
+            &config,
+            &[ImageInput::new("aGVsbG8=", "image/png")],
+        )
+        .expect("Expected lenient vision extraction to succeed");
+        assert_eq!(data.proto_transactions.len(), 1);
+        assert!(!data.errors.is_empty());
     }
 
     #[test]

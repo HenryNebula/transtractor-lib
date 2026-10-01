@@ -305,6 +305,78 @@ impl LibParser {
         utils::rust_statement_data_to_py_statement_data(&data)
     }
 
+    /// Process a PDF file path leniently (requires the `llm` feature): rules
+    /// engine first, then the local LLM fallback with validation errors
+    /// attached to the returned StatementData instead of raised.
+    #[cfg(feature = "llm")]
+    pub fn py_pdf_path_to_py_statement_data_lenient(
+        &self,
+        py: Python<'_>,
+        py_pdf_path: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let mut benchmark = Benchmark::new();
+        benchmark.total.start();
+        benchmark.pdf_extractor.start();
+        let text_items = py_pdf_path_to_text_items(py_pdf_path)?;
+        benchmark.pdf_extractor.pause();
+        let data = match &self.llm {
+            Some(config) => {
+                match text_items_to_statement_data_with_benchmark(
+                    &self.db,
+                    &text_items,
+                    &mut benchmark,
+                ) {
+                    Ok(data) => Ok(data),
+                    Err(rules_error) => py
+                        .detach(|| {
+                            crate::llm::llm_text_items_to_statement_data_lenient(
+                                config,
+                                &text_items,
+                            )
+                        })
+                        .map_err(|llm_error| {
+                            format!(
+                                "{}; LLM lenient fallback also failed: {}",
+                                rules_error, llm_error
+                            )
+                        }),
+                }
+            }
+            None => {
+                text_items_to_statement_data_with_benchmark(&self.db, &text_items, &mut benchmark)
+            }
+        }
+        .map_err(ParseError::new_err)?;
+        utils::rust_statement_data_to_py_statement_data_lenient(&data)
+    }
+
+    /// Lenient variant of the vision path; validation errors are attached to
+    /// the returned StatementData instead of raised (requires the `llm`
+    /// feature).
+    #[cfg(feature = "llm")]
+    pub fn py_pdf_path_to_py_statement_data_with_images_lenient(
+        &self,
+        py: Python<'_>,
+        py_pdf_path: &Bound<'_, PyAny>,
+        py_images: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let rust_pdf_path = py_pdf_path.extract::<String>()?;
+        let Some(config) = &self.llm else {
+            return Err(PyRuntimeError::new_err(format!(
+                "LLM fallback is not configured; call configure_llm before parsing {} with images",
+                rust_pdf_path
+            )));
+        };
+        let images: Vec<ImageInput> = py_images
+            .into_iter()
+            .map(|(b64, mime)| ImageInput::new(b64, mime))
+            .collect();
+        let data = py
+            .detach(|| crate::llm::llm_images_to_statement_data_lenient(config, &images))
+            .map_err(ParseError::new_err)?;
+        utils::rust_statement_data_to_py_statement_data_lenient(&data)
+    }
+
     /// Process a PDF file path from Python caller and return a JSON spec string.
     pub fn py_pdf_path_to_spec(
         &self,

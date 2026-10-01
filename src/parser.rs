@@ -108,6 +108,29 @@ impl Parser {
         self.statement_data_with_llm_fallback(text_items, &mut benchmark)
     }
 
+    /// Parse the bank statement PDF leniently (requires the `llm` feature and
+    /// a configured fallback). The rules engine runs first; when it fails and
+    /// the LLM extraction does not reconcile, the rows are returned with the
+    /// checker errors in `StatementData.errors` instead of raising — for
+    /// review-then-correct workflows.
+    #[cfg(feature = "llm")]
+    pub fn parse_lenient(&self, pdf_file_path: &str) -> Result<StatementData, String> {
+        let mut benchmark = Benchmark::new();
+        benchmark.total.start();
+        benchmark.pdf_extractor.start();
+        let text_items = pdf_path_to_text_items(pdf_file_path)?;
+        benchmark.pdf_extractor.pause();
+        match text_items_to_statement_data_with_benchmark(&self.db, &text_items, &mut benchmark) {
+            Ok(data) => Ok(data),
+            Err(rules_error) => match &self.llm {
+                Some(config) => {
+                    crate::llm::llm_text_items_to_statement_data_lenient(config, &text_items)
+                }
+                None => Err(rules_error),
+            },
+        }
+    }
+
     /// Parse the bank statement layout file and return a `StatementData`.
     pub fn parse_layout(&self, layout_file_path: &str) -> Result<StatementData, String> {
         let mut benchmark = Benchmark::new();

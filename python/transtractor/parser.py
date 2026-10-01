@@ -67,7 +67,7 @@ class Parser:
         """The active local LLM fallback configuration, if any."""
         return self._llm
 
-    def parse(self, pdf_file_path: str) -> StatementData:
+    def parse(self, pdf_file_path: str, lenient: bool = False) -> StatementData:
         """Parse the bank statement PDF and return a StatementData object.
 
         With an LLM fallback configured, scanned PDFs without a text layer
@@ -75,14 +75,37 @@ class Parser:
         extra) and parsed via the local vision model; everything else falls
         back to the LLM text path only when the rules engine fails.
 
+        With ``lenient=True`` (LLM fallback only), an extraction whose
+        numbers fail the balance validation is returned anyway with the
+        checker errors attached to ``StatementData.errors`` — the
+        review-then-correct mode. Strict mode (the default) raises
+        :class:`ParseError` instead.
+
         :param pdf_file_path: Path to the PDF file to be processed
+        :param lenient: Return near-correct LLM extractions with errors
+            attached instead of raising (requires an LLM fallback)
         :return: StatementData object representing the parsed bank statement data
         :raises ParseError: If statement is not recognisable or not parsed correctly
         """
-        sd: StatementData
-        if self._llm is not None and not self._inner.py_pdf_path_has_text_layer(
+        scanned = self._llm is not None and not self._inner.py_pdf_path_has_text_layer(
             pdf_file_path
-        ):
+        )
+        sd: StatementData
+        if lenient and self._llm is not None:
+            if scanned:
+                images = render_pdf_pages(pdf_file_path)
+                sd = cast(
+                    StatementData,
+                    self._inner.py_pdf_path_to_py_statement_data_with_images_lenient(
+                        pdf_file_path, images
+                    ),
+                )
+            else:
+                sd = cast(
+                    StatementData,
+                    self._inner.py_pdf_path_to_py_statement_data_lenient(pdf_file_path),
+                )
+        elif scanned:
             images = render_pdf_pages(pdf_file_path)
             sd = cast(
                 StatementData,

@@ -6,6 +6,23 @@ use pyo3::types::{PyAny, PyDict, PyList};
 pub fn rust_statement_data_to_py_statement_data(
     rust_statement_data: &crate::structs::StatementData,
 ) -> PyResult<Py<PyAny>> {
+    convert_statement_data(rust_statement_data, false)
+}
+
+/// Convert a Rust StatementData to a Python StatementData object, allowing
+/// checker errors through (lenient parse mode). The errors are attached to
+/// the Python object so review tooling can surface the offending rows.
+pub fn rust_statement_data_to_py_statement_data_lenient(
+    rust_statement_data: &crate::structs::StatementData,
+) -> PyResult<Py<PyAny>> {
+    convert_statement_data(rust_statement_data, true)
+}
+
+/// Shared conversion; `lenient` permits (and carries) checker errors.
+fn convert_statement_data(
+    rust_statement_data: &crate::structs::StatementData,
+    lenient: bool,
+) -> PyResult<Py<PyAny>> {
     Python::attach(|py| {
         // Import the Python StatementData and Transaction classes
         let statement_data_module = py.import("transtractor.structs.statement_data")?;
@@ -41,7 +58,7 @@ pub fn rust_statement_data_to_py_statement_data(
             PyRuntimeError::new_err("StatementData is missing required field: closing_balance")
         })?;
 
-        if !rust_statement_data.errors.is_empty() {
+        if !rust_statement_data.errors.is_empty() && !lenient {
             return Err(PyRuntimeError::new_err(
                 "StatementData must be error-free before export to Python",
             ));
@@ -85,6 +102,7 @@ pub fn rust_statement_data_to_py_statement_data(
         kwargs.set_item("opening_balance", opening_balance)?;
         kwargs.set_item("closing_balance", closing_balance)?;
         kwargs.set_item("transactions", py_transactions)?;
+        kwargs.set_item("errors", &rust_statement_data.errors)?;
         let benchmark = rust_statement_data.benchmark.as_micros();
         let benchmark_kwargs = PyDict::new(py);
         benchmark_kwargs.set_item("total", benchmark.total)?;
