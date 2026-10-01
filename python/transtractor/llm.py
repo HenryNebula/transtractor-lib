@@ -40,6 +40,9 @@ class LlmConfig:
         with each request. Required for Qwen3-style thinking models served by
         llama-server, which otherwise spend the token budget reasoning and
         return an empty answer
+    :param correction_rounds: When an extraction fails the balance
+        validation, feed the checker errors back to the model for another
+        attempt. 0 disables the self-correction loop
     """
 
     base_url: str
@@ -48,6 +51,7 @@ class LlmConfig:
     timeout_secs: int = 120
     schema_mode: bool = True
     no_think: bool = False
+    correction_rounds: int = 1
 
     @classmethod
     def from_env(cls) -> LlmConfig | None:
@@ -62,9 +66,15 @@ class LlmConfig:
             return None
         api_key = os.environ.get(ENV_API_KEY, "").strip() or None
         no_think = os.environ.get("TRANSTRACTOR_LLM_NO_THINK", "").strip() == "1"
+        rounds_env = os.environ.get("TRANSTRACTOR_LLM_CORRECTION_ROUNDS", "1")
+        try:
+            correction_rounds = int(rounds_env)
+        except ValueError:
+            correction_rounds = 1
         return cls(
             base_url=base_url,
             model=model,
             api_key=api_key,
             no_think=no_think,
+            correction_rounds=correction_rounds,
         )

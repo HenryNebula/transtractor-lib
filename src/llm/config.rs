@@ -28,12 +28,16 @@ pub struct LlmConfig {
     /// llama-server, which otherwise spend the token budget reasoning and
     /// return an empty answer.
     pub no_think: bool,
+    /// Self-correction rounds: when the extraction fails the balance
+    /// validation, the checker errors are fed back to the model for another
+    /// attempt. 0 disables the loop (single-shot extraction).
+    pub correction_rounds: u32,
 }
 
 impl LlmConfig {
     /// Build a config for the given endpoint and model with default settings
     /// (no API key, 120s timeout, temperature 0, schema mode on, thinking
-    /// enabled).
+    /// enabled, one correction round).
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
             base_url: normalise_base_url(&base_url.into()),
@@ -43,6 +47,7 @@ impl LlmConfig {
             temperature: 0.0,
             schema_mode: true,
             no_think: false,
+            correction_rounds: 1,
         }
     }
 
@@ -66,6 +71,11 @@ impl LlmConfig {
             && flag.trim().eq_ignore_ascii_case("1")
         {
             config.no_think = true;
+        }
+        if let Ok(rounds) = std::env::var("TRANSTRACTOR_LLM_CORRECTION_ROUNDS")
+            && let Ok(rounds) = rounds.trim().parse::<u32>()
+        {
+            config.correction_rounds = rounds;
         }
         Some(config)
     }

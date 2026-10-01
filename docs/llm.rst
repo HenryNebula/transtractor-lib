@@ -107,6 +107,23 @@ exposes the chat-template switch for this; enable it with ``no_think=True``:
 
 or ``TRANSTRACTOR_LLM_NO_THINK=1`` via the environment.
 
+Self-correction loop
+--------------------
+
+When an extraction fails the balance validation, the checker errors are fed
+back to the model for another attempt: the conversation gains the model's
+previous answer plus a user message quoting each error verbatim (e.g.
+``Transaction 4 balance mismatch. Calculated: 90350.00, Stated: -12350.00``)
+and guidance on the typical causes (misread digit, flipped sign, dropped or
+duplicated row, wrong ordering). The attempt with the fewest errors is kept.
+On a 62-transaction test statement this repaired 55 of 56 checker errors in
+a single round with a 4B model.
+
+Configure with ``LlmConfig(correction_rounds=N)`` (default 1; 0 disables the
+loop; ``TRANSTRACTOR_LLM_CORRECTION_ROUNDS`` via the environment). Each round
+is one extra inference call over a longer conversation, so wall-clock time
+scales roughly with rounds.
+
 Lenient mode for review workflows
 ---------------------------------
 

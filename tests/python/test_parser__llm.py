@@ -117,7 +117,8 @@ def test_parse_falls_back_to_llm_when_rules_fail(mock_llm):
     body = endpoint.requests[0]
     assert body["model"] == "mock-model"
     assert body["response_format"]["type"] == "json_schema"
-    user_content = body["messages"][1]["content"][0]["text"]
+    user_content = body["messages"][1]["content"]
+    assert isinstance(user_content, str)
     assert "<<<PAGE 1>>>" in user_content
 
 
@@ -125,13 +126,42 @@ def test_llm_numbers_that_do_not_reconcile_raise_parse_error(mock_llm):
     """A response whose numbers fail balance validation is rejected."""
     bad_statement = dict(VALID_STATEMENT)
     bad_statement["closing_balance"] = 800.0  # 1000 - 150 + 50 = 900
-    endpoint = mock_llm([(200, assistant_content(json.dumps(bad_statement)))])
+    # The correction loop runs once by default: both attempts fail.
+    endpoint = mock_llm(
+        [
+            (200, assistant_content(json.dumps(bad_statement))),
+            (200, assistant_content(json.dumps(bad_statement))),
+        ]
+    )
     parser = Parser(llm=LlmConfig(base_url=endpoint.url, model="mock-model"))
 
     with pytest.raises(ParseError) as excinfo:
         parser.parse(str(TEST_PDF))
 
     assert "failed validation" in str(excinfo.value)
+
+
+def test_correction_loop_recovers_on_second_attempt(mock_llm):
+    """Checker errors are fed back to the model, which fixes its answer."""
+    bad_statement = dict(VALID_STATEMENT)
+    bad_statement["closing_balance"] = 800.0
+    endpoint = mock_llm(
+        [
+            (200, assistant_content(json.dumps(bad_statement))),
+            (200, assistant_content(json.dumps(VALID_STATEMENT))),
+        ]
+    )
+    parser = Parser(llm=LlmConfig(base_url=endpoint.url, model="mock-model"))
+
+    statement_data = parser.parse(str(TEST_PDF))  # strict mode, reconciled
+
+    assert statement_data.errors == []
+    assert len(statement_data.transactions) == 2
+    assert len(endpoint.requests) == 2
+    second = endpoint.requests[1]
+    assert second["messages"][2]["role"] == "assistant"
+    assert "balance mismatch" in second["messages"][3]["content"]
+    assert "Your previous answer" in second["messages"][3]["content"]
 
 
 def test_llm_schema_rejection_is_retried_without_response_format(mock_llm):
@@ -156,15 +186,17 @@ def test_lenient_parse_returns_rows_with_errors(mock_llm):
     """Lenient mode returns near-correct rows plus checker errors."""
     bad_statement = dict(VALID_STATEMENT)
     bad_statement["closing_balance"] = 800.0  # 1000 - 150 + 50 = 900
-    # Two canned responses: one consumed by the strict attempt below, one by
-    # the lenient attempt (both trigger the LLM fallback on the same PDF).
+    # Correction loop disabled to keep this test single-shot: one canned
+    # response per attempt (strict attempt, then lenient attempt).
     endpoint = mock_llm(
         [
             (200, assistant_content(json.dumps(bad_statement))),
             (200, assistant_content(json.dumps(bad_statement))),
         ]
     )
-    parser = Parser(llm=LlmConfig(base_url=endpoint.url, model="mock-model"))
+    parser = Parser(
+        llm=LlmConfig(base_url=endpoint.url, model="mock-model", correction_rounds=0)
+    )
 
     with pytest.raises(ParseError):
         parser.parse(str(TEST_PDF))  # strict default still raises
@@ -178,7 +210,9 @@ def test_lenient_parse_returns_rows_with_errors(mock_llm):
 
     # A reconciling extraction comes back error-free even in lenient mode.
     good = mock_llm([(200, assistant_content(json.dumps(VALID_STATEMENT)))])
-    parser_good = Parser(llm=LlmConfig(base_url=good.url, model="mock-model"))
+    parser_good = Parser(
+        llm=LlmConfig(base_url=good.url, model="mock-model", correction_rounds=0)
+    )
     clean = parser_good.parse(str(TEST_PDF), lenient=True)
     assert clean.errors == []
     assert len(clean.transactions) == 2

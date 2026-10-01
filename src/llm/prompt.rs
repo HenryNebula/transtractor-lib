@@ -1,27 +1,57 @@
 //! Prompt construction for the LLM fallback backend.
+//!
+//! The extraction guidance adapts ideas from bankstatementparser's
+//! Apache-2.0 extraction prompt (reading-order warning, chronological
+//! sorting, never invent values).
 
 use crate::structs::TextItem;
 
 /// Instructions shared by the text and vision extraction paths.
-pub const SYSTEM_PROMPT: &str = "You are a precise data-extraction engine for bank statement \
-documents. Extract the account number, the statement period start date, the opening balance, \
-the closing balance, and every transaction row (date, description, amount, running balance \
-when shown) from the provided document.\n\
+pub const SYSTEM_PROMPT: &str = "You are a meticulous bank statement data extraction engine. \
+Your job is to read the provided statement document and transcribe its contents into STRICT \
+JSON. Never invent values; transcription only — do no arithmetic.\n\
 Rules:\n\
 - Copy numbers exactly as printed; ignore thousand separators and currency symbols.\n\
 - Copy the account number exactly as printed, including any spaces or dashes.\n\
 - Output amounts as plain decimal numbers with a sign: negative for money leaving the \
 account, positive for money coming in.\n\
 - Use ISO dates (YYYY-MM-DD).\n\
-- Include every transaction ledger row, in statement order. Do not invent, merge, omit or \
-reorder transactions.\n\
+- Include every transaction ledger row. Do not invent, merge or omit transactions.\n\
+- PDF text can arrive out of reading order: sort transactions chronologically by date \
+(oldest first), and where two rows share a date, keep the order they appeared in the \
+document.\n\
 - Skip page headers and footers, page numbers, marketing text, and end-of-statement summary \
 tables.\n\
 - The balance field of a transaction is the running balance printed on that row; omit it \
 when the statement does not show one.\n\
 - The opening and closing balances are the balances immediately before the first and after \
 the last transaction of the statement period.\n\
-- Respond with a single JSON object and nothing else.";
+- Your answer is verified by arithmetic: previous balance + each amount must equal that \
+row's stated balance, and the total must reach the stated closing balance. A wrong digit, \
+flipped sign, or dropped row will be detected.\n\
+- Respond with a single JSON object and nothing else — no prose, no markdown.";
+
+/// User instruction for the correction round of the self-correction loop:
+/// the checker errors from the previous attempt are fed back verbatim.
+pub fn correction_prompt(errors: &[String], previous_json: &str) -> String {
+    let mut prompt = String::from(
+        "Your previous answer failed arithmetic validation against the statement's own \
+balances. The validation errors are:\n",
+    );
+    for error in errors {
+        prompt.push_str(&format!("- {}\n", error));
+    }
+    prompt.push_str(&format!(
+        "\nYour previous answer was:\n{}\n\n\
+Fix the errors and return the complete corrected JSON object only. Typical causes: a misread \
+digit, a flipped sign (negative = money out), a dropped or duplicated transaction row, or \
+rows in the wrong order. Check that every transaction appears exactly once, that each \
+running balance equals the previous balance plus the amount, and that the total reaches the \
+stated closing balance.",
+        previous_json
+    ));
+    prompt
+}
 
 /// Render extracted text items as page-fenced plain text for the LLM.
 ///

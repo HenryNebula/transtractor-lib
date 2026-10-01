@@ -60,6 +60,7 @@ class Parser:
                 self._llm.timeout_secs,
                 self._llm.schema_mode,
                 self._llm.no_think,
+                self._llm.correction_rounds,
             )
 
     @property

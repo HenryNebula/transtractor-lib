@@ -31,6 +31,7 @@ class LibParser:
         timeout_secs: int = 120,
         schema_mode: bool = True,
         no_think: bool = False,
+        correction_rounds: int = 1,
     ) -> None:
         """
         Configure an OpenAI-compatible local inference endpoint used as the
@@ -45,6 +46,8 @@ class LibParser:
         :param timeout_secs: Global request timeout in seconds
         :param schema_mode: Attempt `response_format: json_schema` guided decoding
         :param no_think: Disable thinking for Qwen3-style models
+        :param correction_rounds: Feed checker errors back to the model for
+            another attempt when validation fails (0 disables)
         """
 
     def is_llm_configured(self) -> bool:

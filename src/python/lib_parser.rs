@@ -131,7 +131,10 @@ impl LibParser {
     /// `llm` cargo feature; raises RuntimeError when the library was built
     /// without it.
     #[cfg(feature = "llm")]
-    #[pyo3(signature = (base_url, model, api_key=None, timeout_secs=120, schema_mode=true, no_think=false))]
+    // Python callers see keyword arguments, so the flat parameter list is the
+    // friendliest surface despite its length.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (base_url, model, api_key=None, timeout_secs=120, schema_mode=true, no_think=false, correction_rounds=1))]
     pub fn configure_llm(
         &mut self,
         base_url: &str,
@@ -140,12 +143,14 @@ impl LibParser {
         timeout_secs: u64,
         schema_mode: bool,
         no_think: bool,
+        correction_rounds: u32,
     ) -> PyResult<()> {
         let mut config = LlmConfig::new(base_url, model);
         config.api_key = api_key.map(|key| key.to_string());
         config.timeout_secs = timeout_secs;
         config.schema_mode = schema_mode;
         config.no_think = no_think;
+        config.correction_rounds = correction_rounds;
         self.llm = Some(config);
         Ok(())
     }

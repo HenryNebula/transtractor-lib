@@ -64,12 +64,11 @@ For scanned statements, supply page images via the vision path instead."
                 .to_string(),
         );
     }
-    let user_content = json!([{
-        "type": "text",
-        "text": prompt::text_items_to_prompt(items),
-    }]);
-    let body = build_request_body(config, user_content);
-    llm_request_to_statement_data(config, body, lenient)
+    let messages = json!([
+        { "role": "system", "content": prompt::SYSTEM_PROMPT },
+        { "role": "user", "content": prompt::text_items_to_prompt(items) },
+    ]);
+    llm_request_to_statement_data(config, messages, lenient)
 }
 
 /// Extract statement data from page images via a local vision LLM endpoint.
@@ -114,19 +113,19 @@ fn llm_images_to_statement_data_inner(
         "type": "text",
         "text": prompt::vision_prompt(images.len()),
     }));
-    let body = build_request_body(config, Value::Array(content));
-    llm_request_to_statement_data(config, body, lenient)
+    let messages = json!([
+        { "role": "system", "content": prompt::SYSTEM_PROMPT },
+        { "role": "user", "content": Value::Array(content) },
+    ]);
+    llm_request_to_statement_data(config, messages, lenient)
 }
 
-/// Assemble the chat completion request body for either extraction path.
-fn build_request_body(config: &LlmConfig, user_content: Value) -> Value {
+/// Assemble the chat completion request body for the given conversation.
+fn build_request_body(config: &LlmConfig, messages: Value) -> Value {
     let mut body = json!({
         "model": config.model,
         "temperature": config.temperature,
-        "messages": [
-            { "role": "system", "content": prompt::SYSTEM_PROMPT },
-            { "role": "user", "content": user_content },
-        ],
+        "messages": messages,
     });
     if config.schema_mode {
         body["response_format"] = json!({
@@ -146,40 +145,78 @@ fn build_request_body(config: &LlmConfig, user_content: Value) -> Value {
     body
 }
 
-/// Run one extraction request end to end: call the endpoint, parse the
+/// Run the extraction conversation end to end: call the endpoint, parse the
 /// response into an [`schema::LlmStatement`], convert, then fix and check.
-/// In strict mode (the default) validation failures are hard errors; in
-/// lenient mode the data is returned with `errors` populated for review
-/// workflows.
+///
+/// Self-correction loop: when an attempt fails the balance validation and
+/// [`LlmConfig::correction_rounds`] remains, the checker errors are fed back
+/// to the model (assistant answer + named errors) for another attempt. The
+/// attempt with the fewest errors is kept. In strict mode exhausting the
+/// rounds is a hard error; in lenient mode the best attempt is returned with
+/// `errors` populated for review workflows.
 fn llm_request_to_statement_data(
     config: &LlmConfig,
-    body: Value,
+    mut messages: Value,
     lenient: bool,
 ) -> Result<StatementData, String> {
-    let content = client::chat_completion(config, &body)?;
-    let json_str = extract_json(&content)?;
-    let statement: schema::LlmStatement = serde_json::from_str(json_str).map_err(|e| {
-        format!(
-            "LLM returned a response that does not match the statement schema: {}",
-            e
-        )
-    })?;
-    let provenance = format!("{}/{}", PROVENANCE_PREFIX, config.model);
-    let mut data = statement.to_statement_data(&provenance)?;
+    let attempts = config.correction_rounds as usize + 1;
+    let mut best: Option<(StatementData, String)> = None;
 
-    // Identical post-processing to the rules engine: fixers backfill implicit
-    // balances/dates and correct amount signs, then the checkers verify that
-    // the numbers reconcile with the opening and closing balances.
-    fix_statement_data(&mut data);
-    check_statement_data(&mut data);
+    for attempt in 0..attempts {
+        let body = build_request_body(config, messages.clone());
+        let content = client::chat_completion(config, &body)?;
+        let json_str = extract_json(&content)?.to_string();
+        let statement: schema::LlmStatement = serde_json::from_str(&json_str).map_err(|e| {
+            format!(
+                "LLM returned a response that does not match the statement schema: {}",
+                e
+            )
+        })?;
+        let provenance = format!("{}/{}", PROVENANCE_PREFIX, config.model);
+        let mut data = statement.to_statement_data(&provenance)?;
 
-    if !data.errors.is_empty() && !lenient {
-        return Err(format!(
-            "LLM extraction failed validation (numbers do not reconcile): {}",
-            data.errors.join("; ")
-        ));
+        // Identical post-processing to the rules engine: fixers backfill
+        // implicit balances/dates and correct amount signs, then the checkers
+        // verify that the numbers reconcile with the opening and closing
+        // balances.
+        fix_statement_data(&mut data);
+        check_statement_data(&mut data);
+
+        if data.errors.is_empty() {
+            return Ok(data);
+        }
+        let error_count = data.errors.len();
+        let errors = data.errors.clone();
+        if best
+            .as_ref()
+            .is_none_or(|(b, _)| error_count < b.errors.len())
+        {
+            best = Some((data, json_str.clone()));
+        }
+
+        if attempt + 1 < attempts {
+            // Feed the failing attempt back: assistant answer, then the
+            // checker errors naming the offending rows.
+            if let Some(conversation) = messages.as_array_mut() {
+                conversation.push(json!({ "role": "assistant", "content": content }));
+                conversation.push(json!({
+                    "role": "user",
+                    "content": prompt::correction_prompt(&errors, &json_str),
+                }));
+            }
+        }
     }
-    Ok(data)
+
+    let (data, _) = best.ok_or_else(|| "LLM extraction produced no result".to_string())?;
+    if lenient {
+        return Ok(data);
+    }
+    Err(format!(
+        "LLM extraction failed validation after {} correction round(s) (numbers do not \
+reconcile): {}",
+        config.correction_rounds,
+        data.errors.join("; ")
+    ))
 }
 
 /// Extract the first balanced JSON object from an LLM response, tolerating
@@ -309,13 +346,53 @@ mod tests {
                 { "date": "2025-01-03", "description": "Deposit", "amount": 50.0, "balance": 900.0 }
             ]
         });
-        let server = MockServer::start(vec![(200, completion_body(&bad_json.to_string()))]);
+        // Default correction_rounds is 1: both the first attempt and the
+        // correction round return the bad extraction.
+        let server = MockServer::start(vec![
+            (200, completion_body(&bad_json.to_string())),
+            (200, completion_body(&bad_json.to_string())),
+        ]);
         let config = LlmConfig::new(server.url.clone(), "mock-model");
 
         let error = llm_text_items_to_statement_data(&config, &sample_items())
             .expect_err("Expected validation failure");
         assert!(error.contains("failed validation"), "got: {}", error);
         assert!(error.contains("balance mismatch"), "got: {}", error);
+        assert_eq!(server.requests().len(), 2);
+    }
+
+    #[test]
+    fn test_correction_loop_recovers_on_second_attempt() {
+        let bad_json = json!({
+            "account_number": "1234 5678 9123 4567",
+            "start_date": "2025-01-01",
+            "opening_balance": 1000.0,
+            "closing_balance": 800.0,
+            "transactions": [
+                { "date": "2025-01-02", "description": "Payment", "amount": -150.0, "balance": 850.0 },
+                { "date": "2025-01-03", "description": "Deposit", "amount": 50.0, "balance": 900.0 }
+            ]
+        });
+        // First attempt fails validation; the correction round sees the
+        // checker errors and returns a reconciling extraction.
+        let server = MockServer::start(vec![
+            (200, completion_body(&bad_json.to_string())),
+            (200, completion_body(&valid_statement_json())),
+        ]);
+        let config = LlmConfig::new(server.url.clone(), "mock-model");
+
+        let data = llm_text_items_to_statement_data(&config, &sample_items())
+            .expect("Expected the correction round to reconcile");
+        assert!(data.errors.is_empty());
+        assert_eq!(data.proto_transactions.len(), 2);
+
+        // The second request continues the conversation: assistant answer,
+        // then a user message quoting the checker errors.
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains("\"role\":\"assistant\""));
+        assert!(requests[1].contains("failed arithmetic validation"));
+        assert!(requests[1].contains("balance mismatch"));
     }
 
     #[test]
@@ -330,11 +407,15 @@ mod tests {
                 { "date": "2025-01-03", "description": "Deposit", "amount": 50.0, "balance": 900.0 }
             ]
         });
-        let server = MockServer::start(vec![(200, completion_body(&bad_json.to_string()))]);
+        let server = MockServer::start(vec![
+            (200, completion_body(&bad_json.to_string())),
+            (200, completion_body(&bad_json.to_string())),
+        ]);
         let config = LlmConfig::new(server.url.clone(), "mock-model");
 
         // Same extraction as the strict test above, but lenient: the rows come
-        // back with the checker errors attached for review workflows.
+        // back with the checker errors attached for review workflows (both
+        // attempts fail, so the best attempt is returned after the loop).
         let data = llm_text_items_to_statement_data_lenient(&config, &sample_items())
             .expect("Expected lenient extraction to succeed");
         assert_eq!(data.key.as_deref(), Some("llm/mock-model"));
@@ -365,7 +446,10 @@ mod tests {
                 { "date": "2025-01-02", "description": "Payment", "amount": -100.0, "balance": 900.0 }
             ]
         });
-        let server = MockServer::start(vec![(200, completion_body(&bad_json.to_string()))]);
+        let server = MockServer::start(vec![
+            (200, completion_body(&bad_json.to_string())),
+            (200, completion_body(&bad_json.to_string())),
+        ]);
         let config = LlmConfig::new(server.url.clone(), "mock-model");
 
         let data = llm_images_to_statement_data_lenient(
