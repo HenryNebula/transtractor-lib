@@ -30,14 +30,23 @@ pub fn check_balances(sd: &mut StatementData) {
 
     // Check each transaction
     for (index, transaction) in sd.proto_transactions.iter().enumerate() {
-        // Panic if transaction data is missing
-        let transaction_amount = transaction.amount.unwrap_or_else(|| {
-            panic!("Transaction {index} must have an amount set before calling check_balances")
-        });
-
-        let transaction_balance = transaction.balance.unwrap_or_else(|| {
-            panic!("Transaction {index} must have a balance set before calling check_balances")
-        });
+        // Missing amount/balance means the configuration did not bind the
+        // columns for this row; report through the error channel instead of
+        // panicking.
+        let Some(transaction_amount) = transaction.amount else {
+            sd.add_error(format!(
+                "Transaction {index} must have an amount set before calling check_balances. \
+Check the amount column configuration."
+            ));
+            return;
+        };
+        let Some(transaction_balance) = transaction.balance else {
+            sd.add_error(format!(
+                "Transaction {index} must have a balance set before calling check_balances. \
+Check the balance column configuration."
+            ));
+            return;
+        };
 
         // Add transaction amount to running balance
         running_balance += transaction_amount;
@@ -124,8 +133,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Transaction 0 must have an amount set")]
-    fn test_check_balances_panic_missing_transaction_amount() {
+    fn test_check_balances_missing_transaction_amount_reports_error() {
         let mut sd = StatementData::new();
         sd.set_opening_balance(1000.0);
         sd.set_closing_balance(900.0);
@@ -136,11 +144,17 @@ mod tests {
         sd.add_proto_transaction(tx);
 
         check_balances(&mut sd);
+
+        assert_eq!(sd.errors.len(), 1);
+        assert!(
+            sd.errors[0].contains("Transaction 0 must have an amount set"),
+            "got: {:?}",
+            sd.errors
+        );
     }
 
     #[test]
-    #[should_panic(expected = "Transaction 0 must have a balance set")]
-    fn test_check_balances_panic_missing_transaction_balance() {
+    fn test_check_balances_missing_transaction_balance_reports_error() {
         let mut sd = StatementData::new();
         sd.set_opening_balance(1000.0);
         sd.set_closing_balance(900.0);
@@ -151,6 +165,13 @@ mod tests {
         sd.add_proto_transaction(tx);
 
         check_balances(&mut sd);
+
+        assert_eq!(sd.errors.len(), 1);
+        assert!(
+            sd.errors[0].contains("Transaction 0 must have a balance set"),
+            "got: {:?}",
+            sd.errors
+        );
     }
 
     #[test]

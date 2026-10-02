@@ -5,8 +5,8 @@ use std::collections::HashMap;
 /// This fixer should be applied after implicit_balance to lock the order
 /// so that transactions can be reordered safely without breaking the running balance.
 ///
-/// # Panics
-/// Panics if dates are found out of order - the transtractor isn't set up to deal with this.
+/// If any transaction lacks a date, the fixer records an error on the
+/// statement and returns (callers treat non-empty errors as a parse failure).
 pub fn fix_set_indices(sd: &mut StatementData) {
     if sd.proto_transactions.is_empty() {
         return;
@@ -15,13 +15,18 @@ pub fn fix_set_indices(sd: &mut StatementData) {
     let mut index_for_date = HashMap::new();
 
     for (i, proto_transaction) in sd.proto_transactions.iter_mut().enumerate() {
-        // Validate that transaction has a date (should be guaranteed by earlier fixers)
+        // Validate that transaction has a date. An imperfect configuration
+        // can leave dates missing; report through the error channel instead
+        // of panicking.
         let current_date = match proto_transaction.date {
             Some(date) => date,
-            None => panic!(
-                "Transaction at position {} does not have a date. This should not happen after date fixers.",
-                i
-            ),
+            None => {
+                sd.add_error(format!(
+                    "Transaction at position {i} does not have a date. This should not \
+happen after date fixers. Check the date column configuration."
+                ));
+                return;
+            }
         };
 
         // If date not encountered before, initialize its index to 0 otherwise increment the existing index.
@@ -146,13 +151,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Transaction at position 1 does not have a date")]
-    fn test_fix_set_indices_panics_on_missing_date() {
+    fn test_missing_date_reports_error_not_panic() {
         let mut sd = StatementData {
             proto_transactions: vec![
                 create_proto_transaction(1000, 0),
                 ProtoTransaction {
-                    date: None, // Missing date should cause panic
+                    date: None, // Missing date: recorded as an error, no panic
                     index: 1,
                     description: "No date transaction".to_string(),
                     amount: Some(100.0),
@@ -170,5 +174,12 @@ mod tests {
         };
 
         fix_set_indices(&mut sd);
+
+        assert_eq!(sd.errors.len(), 1);
+        assert!(
+            sd.errors[0].contains("Transaction at position 1 does not have a date"),
+            "got: {:?}",
+            sd.errors
+        );
     }
 }

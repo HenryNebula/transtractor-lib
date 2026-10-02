@@ -14,10 +14,9 @@ use crate::structs::StatementData;
 /// 1. Primary: by date (oldest first)
 /// 2. Secondary: by index (lowest first) for transactions with the same date
 ///
-/// # Panics
-///
-/// Panics if any transaction does not have a date set. All transactions should
-/// have dates before this fixer is called.
+/// If any transaction lacks a date, the fixer records an error on the
+/// statement and skips reordering (callers treat non-empty errors as a parse
+/// failure).
 pub fn fix_transaction_order(sd: &mut StatementData) {
     // Check if any transaction has a balance set
     // If so, we should not reorder as it might break balance consistency
@@ -27,14 +26,21 @@ pub fn fix_transaction_order(sd: &mut StatementData) {
         return; // Don't reorder if any transaction has a balance
     }
 
-    // Verify all transactions have dates - panic if not
-    for (i, tx) in sd.proto_transactions.iter().enumerate() {
-        if tx.date.is_none() {
-            panic!(
-                "Transaction at index {} does not have a date set. All transactions must have dates before reordering.",
-                i
-            );
-        }
+    // Transactions without dates cannot be ordered. An imperfect
+    // configuration (e.g. one drafted programmatically) can produce them;
+    // report through the error channel instead of panicking so the caller
+    // sees a parse failure rather than a crash.
+    if let Some((i, _)) = sd
+        .proto_transactions
+        .iter()
+        .enumerate()
+        .find(|(_, tx)| tx.date.is_none())
+    {
+        sd.add_error(format!(
+            "Transaction at index {i} does not have a date set. All transactions must have \
+dates before reordering. Check the table's first rows and the date column configuration."
+        ));
+        return;
     }
 
     // Sort by date first, then by index
@@ -97,8 +103,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Transaction at index 1 does not have a date set")]
-    fn test_fix_transaction_order_panics_on_none_dates() {
+    fn test_missing_date_reports_error_not_panic() {
         let mut sd = StatementData::new();
 
         let mut tx1 = ProtoTransaction::new();
@@ -107,13 +112,25 @@ mod tests {
         tx1.description = "Transaction with date".to_string();
 
         let mut tx2 = ProtoTransaction::new();
-        tx2.date = None; // This should cause a panic
+        tx2.date = None; // Missing date: recorded as an error, no panic
         tx2.index = 2;
         tx2.description = "Transaction without date".to_string();
 
         sd.proto_transactions = vec![tx1, tx2];
 
-        fix_transaction_order(&mut sd); // Should panic here
+        fix_transaction_order(&mut sd);
+
+        assert_eq!(sd.errors.len(), 1);
+        assert!(
+            sd.errors[0].contains("Transaction at index 1 does not have a date"),
+            "got: {:?}",
+            sd.errors
+        );
+        // Order untouched: the fixer returned before sorting.
+        assert_eq!(
+            sd.proto_transactions[0].description,
+            "Transaction with date"
+        );
     }
 
     #[test]
