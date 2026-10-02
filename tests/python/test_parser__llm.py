@@ -325,3 +325,29 @@ def test_render_pdf_pages_encodes_jpeges_in_order():
     for b64, mime in pages:
         assert mime == "image/jpeg"
         assert base64.b64decode(b64)[:2] == b"\xff\xd8"  # JPEG magic bytes
+
+
+def test_rules_only_ignores_env_llm_configuration(monkeypatch):
+    """rules_only=Parsers never fall back to an endpoint, even with env set."""
+    monkeypatch.setenv("TRANSTRACTOR_LLM_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("TRANSTRACTOR_LLM_MODEL", "unreachable-model")
+    from transtractor import Parser as PlainParser
+
+    parser = PlainParser(rules_only=True)
+
+    assert parser.llm_config is None
+    assert not parser._inner.is_llm_configured()
+    # A rules failure surfaces directly instead of attempting an endpoint
+    # call (which would hang/timeout to port 9).
+    with pytest.raises(ParseError) as excinfo:
+        parser.parse(str(TEST_PDF))
+    assert "cannot be identified" in str(excinfo.value)
+
+
+def test_from_env_reads_timeout(monkeypatch):
+    monkeypatch.setenv("TRANSTRACTOR_LLM_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("TRANSTRACTOR_LLM_MODEL", "m")
+    monkeypatch.setenv("TRANSTRACTOR_LLM_TIMEOUT", "424")
+    from transtractor import LlmConfig as PlainConfig
+
+    assert PlainConfig.from_env().timeout_secs == 424

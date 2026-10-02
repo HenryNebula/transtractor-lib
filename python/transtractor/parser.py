@@ -44,14 +44,18 @@ class Parser:
         statement_data = parser.parse('statement.pdf')
     """
 
-    def __init__(self, llm: LlmConfig | None = None):
+    def __init__(self, llm: LlmConfig | None = None, rules_only: bool = False):
         """Initialise the Parser with default database.
 
         :param llm: Optional local LLM fallback configuration; when omitted,
             the ``TRANSTRACTOR_LLM_*`` environment variables are consulted
+        :param rules_only: Disable the LLM fallback entirely — ignore the
+            ``llm`` argument and the environment. For tooling that must
+            observe rules-engine failures directly (config drafting loops,
+            benchmarking) instead of silently falling back to an endpoint.
         """
         self._inner = LibParser()
-        self._llm = llm or LlmConfig.from_env()
+        self._llm = None if rules_only else (llm or LlmConfig.from_env())
         if self._llm is not None:
             self._inner.configure_llm(
                 self._llm.base_url,

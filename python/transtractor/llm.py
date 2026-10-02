@@ -71,10 +71,15 @@ class LlmConfig:
             correction_rounds = int(rounds_env)
         except ValueError:
             correction_rounds = 1
+        try:
+            timeout_secs = int(os.environ.get("TRANSTRACTOR_LLM_TIMEOUT", "120"))
+        except ValueError:
+            timeout_secs = 120
         return cls(
             base_url=base_url,
             model=model,
             api_key=api_key,
             no_think=no_think,
             correction_rounds=correction_rounds,
+            timeout_secs=timeout_secs,
         )
