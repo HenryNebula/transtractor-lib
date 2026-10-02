@@ -135,6 +135,20 @@ class Parser:
         )
         return sd
 
+    def table_diagnostics(self, pdf_file_path: str) -> str:
+        """Explain why table lines did not match the configured column orders.
+
+        Replays the table region line by line against the configured
+        ``transaction_formats`` using the engine's own format parsers, naming
+        the first column that could not be satisfied on each unmatched line —
+        including which undeclared format the token would match. For
+        configuration authoring (humans and LLM-assisted harnesses).
+
+        :param pdf_file_path: Path to the PDF file to be processed
+        :return: Diagnostic report text
+        """
+        return self._inner.py_pdf_path_to_table_diagnostics(pdf_file_path)
+
     def debug(self, pdf_file_path: str, output_file: str):
         """Write a summary of the statement data and quality checks for
         each statement extraction configuration applied.

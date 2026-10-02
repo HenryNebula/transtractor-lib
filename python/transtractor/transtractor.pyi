@@ -76,6 +76,15 @@ class LibParser:
         :param py_pdf_path: Path to the PDF file
         """
 
+    def py_pdf_path_to_table_diagnostics(self, py_pdf_path: str) -> str:
+        """
+        Explain, per table line, why lines did not match the configured column
+        orders and formats. Uses the first identified config.
+
+        :param py_pdf_path: Path to the PDF file
+        :return: Diagnostic report text
+        """
+
     def py_pdf_path_to_py_statement_data(self, py_pdf_path: str) -> StatementData:
         """
         Process a PDF file path from Python caller and return a Python StatementData

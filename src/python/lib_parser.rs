@@ -395,6 +395,36 @@ impl LibParser {
         utils::rust_statement_data_to_py_statement_data_lenient(&data)
     }
 
+    /// Explain, per table line, why lines did not match the configured
+    /// column orders and formats. Uses the first identified config (or all
+    /// configs when none is identified). For configuration authoring.
+    pub fn py_pdf_path_to_table_diagnostics(
+        &self,
+        py_pdf_path: &Bound<'_, PyAny>,
+    ) -> PyResult<String> {
+        let text_items = py_pdf_path_to_text_items(py_pdf_path)?;
+        let mut benchmark = Benchmark::new();
+        let configs = self.db.identify_with_benchmark(&text_items, &mut benchmark);
+        if configs.is_empty() {
+            return Ok(
+                "No configuration identified for this statement; table diagnostics require \
+account_terms to match first."
+                    .to_string(),
+            );
+        }
+        let mut sections = Vec::new();
+        for config in &configs {
+            let lines =
+                crate::parsers::flows::table_diagnostics::table_diagnostics(config, &text_items);
+            sections.push(format!(
+                "=== Config {:?} ===\n{}",
+                config.key,
+                lines.join("\n")
+            ));
+        }
+        Ok(sections.join("\n\n"))
+    }
+
     /// Process a PDF file path from Python caller and return a JSON spec string.
     pub fn py_pdf_path_to_spec(
         &self,
